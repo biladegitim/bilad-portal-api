@@ -31,6 +31,7 @@ from app.routers.permission import router as permission_router
 from app.routers.home import router as home_router
 from app.routers.profile import router as profile_router
 from app.routers.notification import router as notification_router
+from app.routers.setup import router as setup_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -73,6 +74,7 @@ app.include_router(permission_router)
 app.include_router(home_router)
 app.include_router(profile_router)
 app.include_router(notification_router)
+app.include_router(setup_router)
 
 
 @app.get("/")
