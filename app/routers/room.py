@@ -1,4 +1,4 @@
-from datetime import date
+﻿from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -78,7 +78,7 @@ def create_room(
     db.refresh(room)
 
     return {
-        "message": "Mekan oluşturuldu",
+        "message": "Mekan oluÅŸturuldu",
         "room_id": room.id,
     }
 
@@ -112,7 +112,7 @@ def update_room(
     room = db.query(Room).filter(Room.id == room_id).first()
 
     if not room:
-        raise HTTPException(status_code=404, detail="Mekan bulunamadı")
+        raise HTTPException(status_code=404, detail="Mekan bulunamadÄ±")
 
     if data.name is not None:
         room.name = data.name
@@ -127,7 +127,7 @@ def update_room(
     db.refresh(room)
 
     return {
-        "message": "Mekan güncellendi",
+        "message": "Mekan gÃ¼ncellendi",
         "room": {
             "id": room.id,
             "name": room.name,
@@ -146,7 +146,7 @@ def delete_room(
     room = db.query(Room).filter(Room.id == room_id).first()
 
     if not room:
-        raise HTTPException(status_code=404, detail="Mekan bulunamadı")
+        raise HTTPException(status_code=404, detail="Mekan bulunamadÄ±")
 
     db.delete(room)
     db.commit()
@@ -171,40 +171,60 @@ def create_room_reservation(
     ).first()
 
     if not room:
-        raise HTTPException(status_code=404, detail="Mekan bulunamadı")
+        raise HTTPException(status_code=404, detail="Mekan bulunamadÄ±")
 
-    conflict = find_reservation_conflict(
-        db,
-        data.room_id,
-        data.weekday,
-        data.start_date,
-        data.end_date,
-        data.start_time,
-        data.end_time,
-    )
+    selected_weekdays = data.weekdays if data.weekdays is not None else [data.weekday]
+    selected_weekdays = [weekday for weekday in selected_weekdays if weekday is not None]
 
-    if conflict:
-        raise HTTPException(status_code=400, detail="Bu mekan seçilen saat aralığında dolu")
+    if not selected_weekdays:
+        raise HTTPException(status_code=400, detail="En az bir gün seçmelisiniz")
 
-    reservation = RoomReservation(
-        room_id=data.room_id,
-        title=data.title,
-        description=data.description,
-        start_date=data.start_date,
-        end_date=data.end_date,
-        weekday=data.weekday,
-        start_time=data.start_time,
-        end_time=data.end_time,
-        created_by=user.id,
-    )
+    invalid_weekdays = [weekday for weekday in selected_weekdays if weekday < 0 or weekday > 6]
 
-    db.add(reservation)
+    if invalid_weekdays:
+        raise HTTPException(status_code=400, detail="Geçersiz gün seçimi")
+
+    selected_weekdays = list(dict.fromkeys(selected_weekdays))
+
+    for weekday in selected_weekdays:
+        conflict = find_reservation_conflict(
+            db,
+            data.room_id,
+            weekday,
+            data.start_date,
+            data.end_date,
+            data.start_time,
+            data.end_time,
+        )
+
+        if conflict:
+            raise HTTPException(status_code=400, detail="Bu mekan seçilen saat aralığında dolu")
+
+    reservations = []
+
+    for weekday in selected_weekdays:
+        reservation = RoomReservation(
+            room_id=data.room_id,
+            title=data.title,
+            description=data.description,
+            start_date=data.start_date,
+            end_date=data.end_date,
+            weekday=weekday,
+            start_time=data.start_time,
+            end_time=data.end_time,
+            created_by=user.id,
+        )
+        db.add(reservation)
+        reservations.append(reservation)
+
     db.commit()
-    db.refresh(reservation)
+
+    for reservation in reservations:
+        db.refresh(reservation)
 
     return {
         "message": "Rezervasyon oluşturuldu",
-        "reservation_id": reservation.id,
+        "reservation_ids": [reservation.id for reservation in reservations],
     }
 
 
@@ -221,12 +241,12 @@ def update_room_reservation(
     ).first()
 
     if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervasyon bulunamadı")
+        raise HTTPException(status_code=404, detail="Rezervasyon bulunamadÄ±")
 
     is_admin = normalize_role(current_db_user.role) in ["admin", "super_admin"]
 
     if not is_admin and reservation.created_by != current_db_user.id:
-        raise HTTPException(status_code=403, detail="Bu rezervasyonu düzenleme yetkiniz yok")
+        raise HTTPException(status_code=403, detail="Bu rezervasyonu dÃ¼zenleme yetkiniz yok")
 
     new_room_id = data.room_id if data.room_id is not None else reservation.room_id
     new_weekday = data.weekday if data.weekday is not None else reservation.weekday
@@ -241,7 +261,7 @@ def update_room_reservation(
     ).first()
 
     if not room:
-        raise HTTPException(status_code=404, detail="Mekan bulunamadı")
+        raise HTTPException(status_code=404, detail="Mekan bulunamadÄ±")
 
     conflict = find_reservation_conflict(
         db,
@@ -255,7 +275,7 @@ def update_room_reservation(
     )
 
     if conflict:
-        raise HTTPException(status_code=400, detail="Bu mekan seçilen saat aralığında dolu")
+        raise HTTPException(status_code=400, detail="Bu mekan seÃ§ilen saat aralÄ±ÄŸÄ±nda dolu")
 
     reservation.room_id = new_room_id
     reservation.weekday = new_weekday
@@ -274,7 +294,7 @@ def update_room_reservation(
     db.refresh(reservation)
 
     return {
-        "message": "Rezervasyon güncellendi",
+        "message": "Rezervasyon gÃ¼ncellendi",
         "reservation_id": reservation.id,
     }
 
@@ -291,7 +311,7 @@ def delete_room_reservation(
     ).first()
 
     if not reservation:
-        raise HTTPException(status_code=404, detail="Rezervasyon bulunamadı")
+        raise HTTPException(status_code=404, detail="Rezervasyon bulunamadÄ±")
 
     is_admin = normalize_role(current_db_user.role) in ["admin", "super_admin"]
 
@@ -316,9 +336,9 @@ def get_weekly_room_reservations(db: Session = Depends(get_db)):
 
     weekday_names = {
         0: "Pazartesi",
-        1: "Salı",
-        2: "Çarşamba",
-        3: "Perşembe",
+        1: "SalÄ±",
+        2: "Ã‡arÅŸamba",
+        3: "PerÅŸembe",
         4: "Cuma",
         5: "Cumartesi",
         6: "Pazar",
@@ -354,7 +374,7 @@ def get_room_reservations_by_date(
     if not reservations:
         return {
             "date": str(selected_date),
-            "message": "Bu tarihte planlanmış mekan kullanımı yok",
+            "message": "Bu tarihte planlanmÄ±ÅŸ mekan kullanÄ±mÄ± yok",
             "reservations": [],
         }
 

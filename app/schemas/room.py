@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+﻿from pydantic import BaseModel
 from typing import Optional
 from datetime import date, time
 
@@ -20,7 +20,8 @@ class RoomReservationCreate(BaseModel):
     description: Optional[str] = None
     start_date: date
     end_date: date
-    weekday: int
+    weekday: Optional[int] = None
+    weekdays: Optional[list[int]] = None
     start_time: time
     end_time: time
 
