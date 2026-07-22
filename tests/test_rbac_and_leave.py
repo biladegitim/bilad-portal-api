@@ -300,6 +300,37 @@ class RbacAndLeaveTests(unittest.TestCase):
         self.assertEqual(first_remove["permission"], permission.code)
         self.assertEqual(second_remove["permission"], permission.code)
 
+    def test_user_permission_update_creates_missing_permission_definition(self):
+        super_admin = self.add_user("Super", "super@example.com", "super_admin")
+        employee = self.add_user("Employee", "employee@example.com", "employee")
+        payload = UserPermissionCreate(permission_code="leave.approve")
+
+        response = assign_permission_to_user(
+            employee.id,
+            payload,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        permission = self.db.query(Permission).filter(
+            Permission.code == payload.permission_code
+        ).first()
+
+        self.assertEqual(response["permission"], payload.permission_code)
+        self.assertIsNotNone(permission)
+
+    def test_remove_missing_permission_definition_is_successful(self):
+        super_admin = self.add_user("Super", "super@example.com", "super_admin")
+        employee = self.add_user("Employee", "employee@example.com", "employee")
+
+        response = remove_permission_from_user(
+            employee.id,
+            "attendance.view",
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+
+        self.assertEqual(response["permission"], "attendance.view")
+
 
 if __name__ == "__main__":
     unittest.main()

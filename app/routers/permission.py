@@ -11,6 +11,31 @@ from app.core.dependencies import super_admin_required
 router = APIRouter()
 
 
+DEFAULT_PERMISSION_DESCRIPTIONS = {
+    "menu.manage": "Menü Yönetimi",
+    "leave.approve": "İzin Onaylama",
+    "attendance.view": "Giriş-Çıkış Raporları",
+}
+
+
+def get_or_create_permission(db: Session, permission_code: str) -> Permission:
+    permission = db.query(Permission).filter(
+        Permission.code == permission_code
+    ).first()
+
+    if permission:
+        return permission
+
+    permission = Permission(
+        code=permission_code,
+        description=DEFAULT_PERMISSION_DESCRIPTIONS.get(permission_code),
+    )
+    db.add(permission)
+    db.flush()
+
+    return permission
+
+
 @router.post("/permissions")
 def create_permission(
     data: PermissionCreate,
@@ -50,12 +75,7 @@ def assign_permission_to_user(
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    permission = db.query(Permission).filter(
-        Permission.code == data.permission_code
-    ).first()
-
-    if not permission:
-        raise HTTPException(status_code=404, detail="Permission bulunamadı")
+    permission = get_or_create_permission(db, data.permission_code)
 
     existing = db.query(UserPermission).filter(
         UserPermission.user_id == user.id,
@@ -128,7 +148,11 @@ def remove_permission_from_user(
     ).first()
 
     if not permission:
-        raise HTTPException(status_code=404, detail="Permission bulunamadı")
+        return {
+            "message": "Permission zaten yok",
+            "user_id": user_id,
+            "permission": permission_code,
+        }
 
     user_permission = db.query(UserPermission).filter(
         UserPermission.user_id == user_id,
