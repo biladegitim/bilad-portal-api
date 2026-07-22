@@ -9,6 +9,12 @@ from app.schemas.user import (
     UserWorkHoursUpdate,
 )
 from app.models.user import User
+from app.models.attendance import AttendanceRecord
+from app.models.event import Event
+from app.models.leave import LeaveRequest
+from app.models.notification import Notification
+from app.models.permission import UserPermission
+from app.models.room import RoomReservation
 from app.database.connection import get_db
 from app.core.security import hash_password
 from app.core.dependencies import get_current_user, super_admin_required
@@ -23,6 +29,49 @@ from app.core.rbac import (
 
 
 router = APIRouter()
+
+
+def delete_user_completely(db: Session, user: User) -> None:
+    user_id = user.id
+
+    db.query(User).filter(User.supervisor_id == user_id).update(
+        {User.supervisor_id: None},
+        synchronize_session=False,
+    )
+    db.query(LeaveRequest).filter(LeaveRequest.approved_by == user_id).update(
+        {LeaveRequest.approved_by: None},
+        synchronize_session=False,
+    )
+
+    db.query(UserPermission).filter(UserPermission.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(Notification).filter(Notification.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(AttendanceRecord).filter(AttendanceRecord.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(LeaveRequest).filter(LeaveRequest.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(Event).filter(Event.created_by == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(RoomReservation).filter(RoomReservation.created_by == user_id).delete(
+        synchronize_session=False
+    )
+
+    db.delete(user)
+
+
+def purge_inactive_users(db: Session) -> int:
+    inactive_users = db.query(User).filter(User.is_active == False).all()
+
+    for user in inactive_users:
+        delete_user_completely(db, user)
+
+    return len(inactive_users)
 
 
 def serialize_user(user: User):
@@ -236,6 +285,20 @@ def get_users(
     }
 
 
+@router.delete("/users/inactive")
+def delete_inactive_users(
+    current_user: dict = Depends(super_admin_required),
+    db: Session = Depends(get_db),
+):
+    deleted_count = purge_inactive_users(db)
+    db.commit()
+
+    return {
+        "message": "Pasif kullanÄ±cÄ±lar silindi",
+        "deleted_count": deleted_count,
+    }
+
+
 @router.delete("/users/{user_id}")
 def delete_user(
     user_id: int,
@@ -252,8 +315,7 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    user.is_active = False
-    user.device_id = None
+    delete_user_completely(db, user)
     db.commit()
 
     return {

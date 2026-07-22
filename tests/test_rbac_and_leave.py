@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database.base import Base
 from app.models.attendance import AttendanceRecord
+from app.models.event import Event
 from app.models.leave import LeaveRequest
 from app.models.notification import Notification
 from app.models.permission import Permission, UserPermission
@@ -17,7 +18,7 @@ from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
 from app.routers.leave import approve_leave_request
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
-from app.routers.user import delete_user
+from app.routers.user import delete_user, purge_inactive_users
 from app.schemas.permission import UserPermissionCreate
 from app.core.security import hash_password
 
@@ -133,7 +134,7 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 403)
 
-    def test_delete_user_deactivates_admin_without_removing_history(self):
+    def test_delete_user_removes_admin_and_related_records(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")
         admin = self.add_user("Admin", "admin@example.com", "admin")
         employee = self.add_user(
@@ -142,6 +143,64 @@ class RbacAndLeaveTests(unittest.TestCase):
             "employee",
             admin.id,
         )
+        leave = LeaveRequest(
+            user_id=admin.id,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow() + timedelta(hours=8),
+            reason="Test",
+            status="pending",
+        )
+        approved_leave = LeaveRequest(
+            user_id=employee.id,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow() + timedelta(hours=8),
+            reason="Approved",
+            status="approved",
+            approved_by=admin.id,
+        )
+        attendance = AttendanceRecord(user_id=admin.id, record_type="check_in")
+        notification = Notification(
+            user_id=admin.id,
+            title="Test",
+            message="Test",
+        )
+        permission = Permission(code="attendance.view", description="Attendance")
+        event = Event(
+            title="Event",
+            start_time=datetime.utcnow(),
+            created_by=admin.id,
+        )
+        room = Room(name="Room")
+
+        self.db.add_all([
+            leave,
+            approved_leave,
+            attendance,
+            notification,
+            permission,
+            event,
+            room,
+        ])
+        self.db.commit()
+        self.db.refresh(permission)
+        self.db.refresh(room)
+
+        user_permission = UserPermission(
+            user_id=admin.id,
+            permission_id=permission.id,
+        )
+        room_reservation = RoomReservation(
+            room_id=room.id,
+            title="Reservation",
+            start_date=datetime.utcnow().date(),
+            end_date=datetime.utcnow().date(),
+            weekday=0,
+            start_time=datetime.utcnow().time(),
+            end_time=(datetime.utcnow() + timedelta(hours=1)).time(),
+            created_by=admin.id,
+        )
+        self.db.add_all([user_permission, room_reservation])
+        self.db.commit()
 
         response = delete_user(
             admin.id,
@@ -149,13 +208,55 @@ class RbacAndLeaveTests(unittest.TestCase):
             self.db,
         )
 
-        self.db.refresh(admin)
         self.db.refresh(employee)
+        self.db.refresh(approved_leave)
 
         self.assertEqual(response["user_id"], admin.id)
-        self.assertFalse(admin.is_active)
-        self.assertEqual(employee.supervisor_id, admin.id)
+        self.assertIsNone(self.db.query(User).filter(User.id == admin.id).first())
+        self.assertIsNone(employee.supervisor_id)
+        self.assertIsNone(approved_leave.approved_by)
+        self.assertEqual(
+            self.db.query(AttendanceRecord).filter(
+                AttendanceRecord.user_id == admin.id
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(LeaveRequest).filter(LeaveRequest.user_id == admin.id).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(UserPermission).filter(
+                UserPermission.user_id == admin.id
+            ).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(Notification).filter(Notification.user_id == admin.id).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(Event).filter(Event.created_by == admin.id).count(),
+            0,
+        )
+        self.assertEqual(
+            self.db.query(RoomReservation).filter(
+                RoomReservation.created_by == admin.id
+            ).count(),
+            0,
+        )
         self.assertNotIn(admin.id, scoped_user_ids(self.db, super_admin))
+
+    def test_purge_inactive_users_removes_existing_passive_accounts(self):
+        inactive = self.add_user("Inactive", "inactive@example.com", "employee")
+        inactive.is_active = False
+        self.db.commit()
+
+        deleted_count = purge_inactive_users(self.db)
+        self.db.commit()
+
+        self.assertEqual(deleted_count, 1)
+        self.assertIsNone(self.db.query(User).filter(User.id == inactive.id).first())
 
     def test_user_permission_updates_are_idempotent(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")
