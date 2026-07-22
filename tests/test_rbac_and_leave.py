@@ -16,7 +16,7 @@ from app.models.qr import QRToken
 from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
-from app.routers.leave import approve_leave_request
+from app.routers.leave import approve_leave_request, delete_leave_request
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.user import delete_user, purge_inactive_users
 from app.schemas.permission import UserPermissionCreate
@@ -133,6 +133,30 @@ class RbacAndLeaveTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.status_code, 403)
+
+    def test_user_can_delete_own_approved_leave(self):
+        employee = self.add_user("Employee", "employee@example.com", "employee")
+        leave = LeaveRequest(
+            user_id=employee.id,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow() + timedelta(hours=8),
+            reason="Test",
+            status="approved",
+        )
+        self.db.add(leave)
+        self.db.commit()
+        self.db.refresh(leave)
+
+        response = delete_leave_request(
+            leave.id,
+            {"sub": employee.email, "role": employee.role},
+            self.db,
+        )
+
+        self.assertEqual(response["leave_id"], leave.id)
+        self.assertIsNone(
+            self.db.query(LeaveRequest).filter(LeaveRequest.id == leave.id).first()
+        )
 
     def test_delete_user_removes_admin_and_related_records(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")

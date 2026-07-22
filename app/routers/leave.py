@@ -247,7 +247,8 @@ def delete_leave_request(
     if not leave:
         raise HTTPException(status_code=404, detail="İzin talebi bulunamadı")
 
-    require_leave_manager(db, current_db_user, leave)
+    if leave.user_id != current_db_user.id:
+        require_leave_manager(db, current_db_user, leave)
 
     db.delete(leave)
     db.commit()
