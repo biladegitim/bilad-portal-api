@@ -16,6 +16,9 @@ from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
 from app.routers.leave import approve_leave_request
+from app.routers.permission import assign_permission_to_user, remove_permission_from_user
+from app.routers.user import delete_user
+from app.schemas.permission import UserPermissionCreate
 from app.core.security import hash_password
 
 
@@ -129,6 +132,72 @@ class RbacAndLeaveTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.status_code, 403)
+
+    def test_delete_user_deactivates_admin_without_removing_history(self):
+        super_admin = self.add_user("Super", "super@example.com", "super_admin")
+        admin = self.add_user("Admin", "admin@example.com", "admin")
+        employee = self.add_user(
+            "Employee",
+            "employee@example.com",
+            "employee",
+            admin.id,
+        )
+
+        response = delete_user(
+            admin.id,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+
+        self.db.refresh(admin)
+        self.db.refresh(employee)
+
+        self.assertEqual(response["user_id"], admin.id)
+        self.assertFalse(admin.is_active)
+        self.assertEqual(employee.supervisor_id, admin.id)
+        self.assertNotIn(admin.id, scoped_user_ids(self.db, super_admin))
+
+    def test_user_permission_updates_are_idempotent(self):
+        super_admin = self.add_user("Super", "super@example.com", "super_admin")
+        employee = self.add_user("Employee", "employee@example.com", "employee")
+        permission = Permission(
+            code="menu.manage",
+            description="Menu management",
+        )
+        self.db.add(permission)
+        self.db.commit()
+
+        payload = UserPermissionCreate(permission_code=permission.code)
+
+        first_assign = assign_permission_to_user(
+            employee.id,
+            payload,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        second_assign = assign_permission_to_user(
+            employee.id,
+            payload,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        first_remove = remove_permission_from_user(
+            employee.id,
+            permission.code,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        second_remove = remove_permission_from_user(
+            employee.id,
+            permission.code,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+
+        self.assertEqual(first_assign["permission"], permission.code)
+        self.assertEqual(second_assign["permission"], permission.code)
+        self.assertEqual(first_remove["permission"], permission.code)
+        self.assertEqual(second_remove["permission"], permission.code)
 
 
 if __name__ == "__main__":

@@ -252,7 +252,8 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    db.delete(user)
+    user.is_active = False
+    user.device_id = None
     db.commit()
 
     return {

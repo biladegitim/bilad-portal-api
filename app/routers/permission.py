@@ -63,7 +63,11 @@ def assign_permission_to_user(
     ).first()
 
     if existing:
-        raise HTTPException(status_code=400, detail="Bu permission kullanıcıda zaten var")
+        return {
+            "message": "Permission kullanıcıda zaten var",
+            "user_id": user.id,
+            "permission": permission.code,
+        }
 
     user_permission = UserPermission(
         user_id=user.id,
@@ -132,7 +136,11 @@ def remove_permission_from_user(
     ).first()
 
     if not user_permission:
-        raise HTTPException(status_code=404, detail="Bu permission kullanıcıda yok")
+        return {
+            "message": "Permission kullanıcıda zaten yok",
+            "user_id": user_id,
+            "permission": permission_code,
+        }
 
     db.delete(user_permission)
     db.commit()

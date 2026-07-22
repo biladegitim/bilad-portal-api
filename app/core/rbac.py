@@ -62,12 +62,18 @@ def scoped_users_query(db: Session, actor: User):
     actor_role = normalize_role(actor.role)
 
     if actor_role == "super_admin":
-        return db.query(User)
+        return db.query(User).filter(User.is_active == True)
 
     if actor_role == "admin":
-        return db.query(User).filter(User.supervisor_id == actor.id)
+        return db.query(User).filter(
+            User.supervisor_id == actor.id,
+            User.is_active == True,
+        )
 
-    return db.query(User).filter(User.id == actor.id)
+    return db.query(User).filter(
+        User.id == actor.id,
+        User.is_active == True,
+    )
 
 
 def scoped_user_ids(db: Session, actor: User) -> list[int]:
