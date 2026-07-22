@@ -21,6 +21,9 @@ SECRET_KEY=<long-random-secret>
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 BACKEND_CORS_ORIGINS=https://<vercel-frontend-domain>
 UPLOAD_ROOT=/data/uploads
+VAPID_PUBLIC_KEY=<web-push-public-key>
+VAPID_PRIVATE_KEY=<web-push-private-key>
+VAPID_SUBJECT=mailto:<admin-email>
 ```
 
 Generate a strong secret locally:

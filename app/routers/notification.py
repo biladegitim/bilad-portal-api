@@ -1,13 +1,120 @@
+import json
+import os
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from pywebpush import WebPushException, webpush
 
 from app.database.connection import get_db
 from app.models.notification import Notification
+from app.models.push_subscription import PushSubscription
+from app.schemas.push_subscription import PushSubscriptionCreate
 from app.core.dependencies import get_current_user
 from app.core.rbac import get_db_user_from_token
 
 
 router = APIRouter()
+
+
+def get_vapid_public_key():
+    return os.getenv("VAPID_PUBLIC_KEY", "")
+
+
+def get_vapid_private_key():
+    return os.getenv("VAPID_PRIVATE_KEY", "")
+
+
+def notification_payload(title: str, message: str, link: str, badge_count: int):
+    return {
+        "title": title,
+        "body": message,
+        "url": link or "/",
+        "badgeCount": badge_count,
+        "icon": "/icon-192.png",
+        "badge": "/icon-192.png",
+    }
+
+
+def send_push_to_user(
+    db: Session,
+    user_id: int,
+    title: str,
+    message: str,
+    link: str,
+):
+    private_key = get_vapid_private_key()
+    public_key = get_vapid_public_key()
+
+    if not private_key or not public_key:
+        return
+
+    unread_count = db.query(Notification).filter(
+        Notification.user_id == user_id,
+        Notification.is_read == False,
+    ).count()
+    payload = notification_payload(title, message, link, unread_count)
+    subscriptions = db.query(PushSubscription).filter(
+        PushSubscription.user_id == user_id
+    ).all()
+
+    for subscription in subscriptions:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": subscription.endpoint,
+                    "keys": {
+                        "p256dh": subscription.p256dh,
+                        "auth": subscription.auth,
+                    },
+                },
+                data=json.dumps(payload),
+                vapid_private_key=private_key,
+                vapid_claims={
+                    "sub": os.getenv("VAPID_SUBJECT", "mailto:admin@bilad.local")
+                },
+            )
+        except WebPushException as exc:
+            if exc.response is not None and exc.response.status_code in [404, 410]:
+                db.delete(subscription)
+
+
+@router.get("/push/public-key")
+def get_push_public_key():
+    public_key = get_vapid_public_key()
+
+    return {
+        "enabled": bool(public_key and get_vapid_private_key()),
+        "public_key": public_key,
+    }
+
+
+@router.post("/push/subscriptions")
+def save_push_subscription(
+    data: PushSubscriptionCreate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = get_db_user_from_token(db, current_user)
+    subscription = db.query(PushSubscription).filter(
+        PushSubscription.endpoint == data.endpoint
+    ).first()
+
+    if subscription:
+        subscription.user_id = user.id
+        subscription.p256dh = data.keys.p256dh
+        subscription.auth = data.keys.auth
+    else:
+        subscription = PushSubscription(
+            user_id=user.id,
+            endpoint=data.endpoint,
+            p256dh=data.keys.p256dh,
+            auth=data.keys.auth,
+        )
+        db.add(subscription)
+
+    db.commit()
+
+    return {"message": "Push aboneliği kaydedildi"}
 
 
 @router.get("/notifications")

@@ -19,6 +19,7 @@ from app.models.menu import Menu
 from app.models.event import Event
 from app.models.room import Room, RoomReservation
 from app.models.permission import Permission, UserPermission
+from app.models.push_subscription import PushSubscription
 
 from app.routers.event import router as event_router
 from app.routers.attendance import router as attendance_router

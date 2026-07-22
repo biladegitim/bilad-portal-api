@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.notification import Notification
 from app.schemas.leave import LeaveCreate
 from app.core.dependencies import get_current_user
+from app.routers.notification import send_push_to_user
 from app.core.rbac import (
     can_manage_user,
     get_db_user_from_token,
@@ -42,6 +43,8 @@ def add_notification(db: Session, user_id: int, title: str, message: str, link: 
         message=message,
         link=link,
     ))
+    db.flush()
+    send_push_to_user(db, user_id, title, message, link)
 
 
 def require_leave_manager(db: Session, actor: User, leave: LeaveRequest) -> User:

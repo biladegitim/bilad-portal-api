@@ -14,6 +14,7 @@ from app.models.event import Event
 from app.models.leave import LeaveRequest
 from app.models.notification import Notification
 from app.models.permission import UserPermission
+from app.models.push_subscription import PushSubscription
 from app.models.room import RoomReservation
 from app.database.connection import get_db
 from app.core.security import hash_password
@@ -44,6 +45,9 @@ def delete_user_completely(db: Session, user: User) -> None:
     )
 
     db.query(UserPermission).filter(UserPermission.user_id == user_id).delete(
+        synchronize_session=False
+    )
+    db.query(PushSubscription).filter(PushSubscription.user_id == user_id).delete(
         synchronize_session=False
     )
     db.query(Notification).filter(Notification.user_id == user_id).delete(
