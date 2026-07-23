@@ -35,6 +35,20 @@ from app.routers.notification import router as notification_router
 
 Base.metadata.create_all(bind=engine)
 
+with engine.begin() as connection:
+    connection.execute(text(
+        "ALTER TABLE room_reservations "
+        "ADD COLUMN IF NOT EXISTS status VARCHAR NOT NULL DEFAULT 'approved'"
+    ))
+    connection.execute(text(
+        "ALTER TABLE room_reservations "
+        "ADD COLUMN IF NOT EXISTS approved_by INTEGER"
+    ))
+    connection.execute(text(
+        "ALTER TABLE room_reservations "
+        "ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"
+    ))
+
 app = FastAPI(title="Bilad Portal API")
 
 cors_origins = [

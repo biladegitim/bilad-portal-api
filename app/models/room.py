@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, Date, Time, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, Date, Time, ForeignKey, DateTime
 from datetime import datetime
 
 from app.database.base import Base
@@ -33,3 +33,6 @@ class RoomReservation(Base):
     end_time = Column(Time, nullable=False)
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    status = Column(String, default="pending", nullable=False)
+    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
