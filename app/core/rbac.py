@@ -12,6 +12,9 @@ ROLE_ALIASES = {
     "qr": "qr",
     "qr_display": "qr",
     "admin": "admin",
+    "superadmin": "super_admin",
+    "super-admin": "super_admin",
+    "super admin": "super_admin",
     "super_admin": "super_admin",
 }
 

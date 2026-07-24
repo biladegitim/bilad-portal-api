@@ -7,7 +7,6 @@ from app.database.connection import get_db
 from app.models.leave import LeaveRequest
 from app.models.user import User
 from app.models.notification import Notification
-from app.models.permission import Permission, UserPermission
 from app.schemas.leave import LeaveCreate
 from app.core.dependencies import get_current_user
 from app.core.permission import has_permission
@@ -60,42 +59,25 @@ def can_approve_leaves(db: Session, user: User) -> bool:
 
 
 def leave_approvers(db: Session, creator: User) -> list[User]:
-    permission = db.query(Permission).filter(
-        Permission.code == LEAVE_APPROVE_PERMISSION
-    ).first()
     users_by_id: dict[int, User] = {}
 
-    if creator.supervisor_id:
-        supervisor = db.query(User).filter(
-            User.id == creator.supervisor_id,
-            User.is_active == True,
-        ).first()
-
-        if supervisor and supervisor.id != creator.id:
-            users_by_id[supervisor.id] = supervisor
-
-    role_users = db.query(User).filter(
+    active_users = db.query(User).filter(
         User.is_active == True,
         User.id != creator.id,
     ).all()
 
-    for user in role_users:
-        if normalize_role(user.role) == "super_admin":
+    for user in active_users:
+        role = normalize_role(user.role)
+
+        if role == "super_admin" or has_permission(
+            db,
+            user.id,
+            LEAVE_APPROVE_PERMISSION,
+        ):
             users_by_id[user.id] = user
+            continue
 
-    if permission:
-        permission_users = (
-            db.query(User)
-            .join(UserPermission, UserPermission.user_id == User.id)
-            .filter(
-                UserPermission.permission_id == permission.id,
-                User.is_active == True,
-                User.id != creator.id,
-            )
-            .all()
-        )
-
-        for user in permission_users:
+        if role == "admin" and can_manage_user(user, creator):
             users_by_id[user.id] = user
 
     return list(users_by_id.values())

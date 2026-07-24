@@ -16,9 +16,10 @@ from app.models.qr import QRToken
 from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
-from app.routers.leave import approve_leave_request, delete_leave_request
+from app.routers.leave import approve_leave_request, create_leave_request, delete_leave_request
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.user import delete_user, purge_inactive_users
+from app.schemas.leave import LeaveCreate
 from app.schemas.permission import UserPermissionCreate
 from app.core.security import hash_password
 
@@ -59,6 +60,7 @@ class RbacAndLeaveTests(unittest.TestCase):
         self.assertEqual(normalize_role("çalışan"), "employee")
         self.assertEqual(normalize_role("calisan"), "employee")
         self.assertEqual(normalize_role("employee"), "employee")
+        self.assertEqual(normalize_role("superadmin"), "super_admin")
 
     def test_scoped_user_ids_match_role_hierarchy(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")
@@ -110,6 +112,59 @@ class RbacAndLeaveTests(unittest.TestCase):
         self.assertEqual(response["status"], "approved")
         self.assertIsNotNone(notification)
         self.assertEqual(notification.link, "/my-leaves")
+
+    def test_leave_request_notifies_actual_approvers(self):
+        super_admin = self.add_user("Super", "super@example.com", "super_admin")
+        admin = self.add_user("Admin", "admin@example.com", "admin")
+        unrelated_admin = self.add_user(
+            "Other Admin",
+            "other-admin@example.com",
+            "admin",
+        )
+        permission_user = self.add_user(
+            "Permission User",
+            "permission@example.com",
+            "employee",
+        )
+        employee = self.add_user(
+            "Employee",
+            "employee@example.com",
+            "employee",
+            admin.id,
+        )
+        permission = Permission(
+            code="leave.approve",
+            description="Leave approval",
+        )
+        self.db.add(permission)
+        self.db.commit()
+        self.db.add(UserPermission(
+            user_id=permission_user.id,
+            permission_id=permission.id,
+        ))
+        self.db.commit()
+
+        create_leave_request(
+            LeaveCreate(
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow() + timedelta(hours=8),
+                reason="Test",
+            ),
+            {"sub": employee.email, "role": employee.role},
+            self.db,
+        )
+
+        notified_user_ids = {
+            notification.user_id
+            for notification in self.db.query(Notification).filter(
+                Notification.link == "/leaves"
+            ).all()
+        }
+
+        self.assertIn(super_admin.id, notified_user_ids)
+        self.assertIn(admin.id, notified_user_ids)
+        self.assertIn(permission_user.id, notified_user_ids)
+        self.assertNotIn(unrelated_admin.id, notified_user_ids)
 
     def test_admin_cannot_approve_non_subordinate_leave(self):
         admin = self.add_user("Admin", "admin@example.com", "admin")
