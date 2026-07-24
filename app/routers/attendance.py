@@ -311,86 +311,113 @@ def export_attendance_excel(
         key = (record.user_id, local_time.date())
         records_by_user_day.setdefault(key, []).append((record, local_time))
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Giriş Çıkış Raporu"
-    ws.append(["Tarih", "Ad Soyad", "Giriş Saati", "Çıkış Saati"])
-
     header_fill = PatternFill("solid", fgColor="DCEBFF")
     header_font = Font(bold=True, color="1F2937")
     warning_fill = PatternFill("solid", fgColor="FEE2E2")
     warning_font = Font(bold=True, color="B91C1C")
     center_alignment = Alignment(horizontal="center", vertical="center")
+    month_names = {
+        1: "Ocak",
+        2: "Subat",
+        3: "Mart",
+        4: "Nisan",
+        5: "Mayis",
+        6: "Haziran",
+        7: "Temmuz",
+        8: "Agustos",
+        9: "Eylul",
+        10: "Ekim",
+        11: "Kasim",
+        12: "Aralik",
+    }
 
-    for cell in ws[1]:
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = center_alignment
+    report_months = sorted(
+        {(record_date.year, record_date.month) for _, record_date in records_by_user_day.keys()}
+    )
+    today = (now_utc + turkey_offset).date()
+    current_month = (today.year, today.month)
 
-    row_index = 2
+    if current_month not in report_months:
+        report_months.append(current_month)
 
-    for user in users:
-        user_days = sorted(
-            day
-            for (user_id, day) in records_by_user_day.keys()
-            if user_id == user.id
-        )
+    wb = Workbook()
+    wb.remove(wb.active)
 
-        for record_date in user_days:
-            day_records = records_by_user_day[(user.id, record_date)]
-            check_ins = [
-                local_time
-                for record, local_time in day_records
-                if record.record_type == "check_in"
-            ]
-            check_outs = [
-                local_time
-                for record, local_time in day_records
-                if record.record_type == "check_out"
-            ]
+    for year, month in report_months:
+        ws = wb.create_sheet(title=f"{month_names[month]} {year}")
+        ws.append(["Tarih", "Ad Soyad", "Giriş Saati", "Çıkış Saati"])
 
-            first_entry = check_ins[0] if check_ins else None
-            last_exit = check_outs[-1] if check_outs else None
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_alignment
 
-            ws.append([
-                record_date.strftime("%d.%m.%Y"),
-                user.full_name,
-                first_entry.strftime("%H:%M") if first_entry else "-",
-                last_exit.strftime("%H:%M") if last_exit else "-",
-            ])
+        row_index = 2
 
-            entry_cell = ws.cell(row=row_index, column=3)
-            exit_cell = ws.cell(row=row_index, column=4)
+        for user in users:
+            user_days = sorted(
+                day
+                for (user_id, day) in records_by_user_day.keys()
+                if user_id == user.id and day.year == year and day.month == month
+            )
 
-            if user.work_start_time and first_entry:
-                expected_start = datetime.combine(record_date, user.work_start_time)
-                if first_entry > expected_start + tolerance:
-                    entry_cell.fill = warning_fill
-                    entry_cell.font = warning_font
+            for record_date in user_days:
+                day_records = records_by_user_day[(user.id, record_date)]
+                check_ins = [
+                    local_time
+                    for record, local_time in day_records
+                    if record.record_type == "check_in"
+                ]
+                check_outs = [
+                    local_time
+                    for record, local_time in day_records
+                    if record.record_type == "check_out"
+                ]
 
-            if user.work_end_time and last_exit:
-                expected_end = datetime.combine(record_date, user.work_end_time)
-                if last_exit < expected_end - tolerance:
-                    exit_cell.fill = warning_fill
-                    exit_cell.font = warning_font
+                first_entry = check_ins[0] if check_ins else None
+                last_exit = check_outs[-1] if check_outs else None
 
-            for cell in ws[row_index]:
-                cell.alignment = center_alignment
+                ws.append([
+                    record_date.strftime("%d.%m.%Y"),
+                    user.full_name,
+                    first_entry.strftime("%H:%M") if first_entry else "-",
+                    last_exit.strftime("%H:%M") if last_exit else "-",
+                ])
 
-            row_index += 1
+                entry_cell = ws.cell(row=row_index, column=3)
+                exit_cell = ws.cell(row=row_index, column=4)
 
-    widths = [14, 28, 16, 16]
-    for index, width in enumerate(widths, start=1):
-        ws.column_dimensions[get_column_letter(index)].width = width
+                if user.work_start_time and first_entry:
+                    expected_start = datetime.combine(record_date, user.work_start_time)
+                    if first_entry > expected_start + tolerance:
+                        entry_cell.fill = warning_fill
+                        entry_cell.font = warning_font
 
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
+                if user.work_end_time and last_exit:
+                    expected_end = datetime.combine(record_date, user.work_end_time)
+                    if last_exit < expected_end - tolerance:
+                        exit_cell.fill = warning_fill
+                        exit_cell.font = warning_font
+
+                for cell in ws[row_index]:
+                    cell.alignment = center_alignment
+
+                row_index += 1
+
+        widths = [14, 28, 16, 16]
+        for index, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(index)].width = width
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        if (year, month) == current_month:
+            wb.active = wb.worksheets.index(ws)
 
     file_stream = BytesIO()
     wb.save(file_stream)
     file_stream.seek(0)
 
-    today = (now_utc + turkey_offset).date()
     filename = f"giris-cikis-raporu-{today}.xlsx"
 
     return StreamingResponse(
