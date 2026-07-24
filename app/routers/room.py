@@ -162,6 +162,7 @@ def create_room(
     room = Room(
         name=data.name,
         description=data.description,
+        floor=data.floor,
         is_active=True,
     )
 
@@ -172,6 +173,14 @@ def create_room(
     return {
         "message": "Mekan oluşturuldu",
         "room_id": room.id,
+        "room": {
+            "id": room.id,
+            "name": room.name,
+            "description": room.description,
+            "floor": room.floor,
+            "floor_name": room.floor,
+            "is_active": room.is_active,
+        },
     }
 
 
@@ -187,6 +196,8 @@ def get_rooms(db: Session = Depends(get_db)):
                 "id": room.id,
                 "name": room.name,
                 "description": room.description,
+                "floor": room.floor,
+                "floor_name": room.floor,
                 "is_active": room.is_active,
             }
             for room in rooms
@@ -212,6 +223,9 @@ def update_room(
     if data.description is not None:
         room.description = data.description
 
+    if data.floor is not None:
+        room.floor = data.floor
+
     if data.is_active is not None:
         room.is_active = data.is_active
 
@@ -224,6 +238,8 @@ def update_room(
             "id": room.id,
             "name": room.name,
             "description": room.description,
+            "floor": room.floor,
+            "floor_name": room.floor,
             "is_active": room.is_active,
         },
     }

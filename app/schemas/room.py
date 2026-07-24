@@ -6,11 +6,13 @@ from datetime import date, time
 class RoomCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    floor: Optional[str] = None
 
 
 class RoomUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    floor: Optional[str] = None
     is_active: Optional[bool] = None
 
 

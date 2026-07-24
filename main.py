@@ -48,6 +48,10 @@ with engine.begin() as connection:
         "ALTER TABLE room_reservations "
         "ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"
     ))
+    connection.execute(text(
+        "ALTER TABLE rooms "
+        "ADD COLUMN IF NOT EXISTS floor VARCHAR"
+    ))
 
 app = FastAPI(title="Bilad Portal API")
 
