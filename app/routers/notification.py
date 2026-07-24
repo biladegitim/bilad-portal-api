@@ -169,6 +169,33 @@ def get_unread_leave_notification_count(
     return {"unread_count": unread_count}
 
 
+@router.get("/notifications/push/status")
+def get_push_status(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = get_db_user_from_token(db, current_user)
+    unread_leave_count = db.query(Notification).filter(
+        Notification.user_id == user.id,
+        Notification.is_read == False,
+        Notification.link.in_(LEAVE_NOTIFICATION_LINKS),
+    ).count()
+    subscription_count = db.query(PushSubscription).filter(
+        PushSubscription.user_id == user.id
+    ).count()
+
+    return {
+        "user_id": user.id,
+        "full_name": user.full_name,
+        "email": user.email,
+        "role": user.role,
+        "is_active": user.is_active,
+        "push_enabled": bool(get_vapid_public_key() and get_vapid_private_key()),
+        "push_subscription_count": subscription_count,
+        "unread_leave_count": unread_leave_count,
+    }
+
+
 @router.patch("/notifications/{notification_id}/read")
 def mark_notification_read(
     notification_id: int,

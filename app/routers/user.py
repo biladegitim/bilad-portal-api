@@ -20,7 +20,6 @@ from app.database.connection import get_db
 from app.core.security import hash_password
 from app.core.dependencies import get_current_user, super_admin_required
 from app.core.rbac import (
-    ROLE_ALIASES,
     VALID_ROLES,
     get_db_user_from_token,
     normalize_role,
@@ -98,7 +97,7 @@ def create_user(
     current_user: dict = Depends(super_admin_required),
     db: Session = Depends(get_db),
 ):
-    role = ROLE_ALIASES.get(user.role or "")
+    role = normalize_role(user.role)
 
     if role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Geçersiz rol")
@@ -165,7 +164,7 @@ def update_user_role(
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    role = ROLE_ALIASES.get(data.role or "")
+    role = normalize_role(data.role)
 
     if role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Geçersiz rol")
