@@ -38,15 +38,33 @@ def serialize_leave(db: Session, leave: LeaveRequest):
     }
 
 
-def add_notification(db: Session, user_id: int, title: str, message: str, link: str):
-    db.add(Notification(
+def add_notification(
+    db: Session,
+    user_id: int,
+    title: str,
+    message: str,
+    link: str,
+) -> Notification:
+    notification = Notification(
         user_id=user_id,
         title=title,
         message=message,
         link=link,
-    ))
+    )
+    db.add(notification)
     db.flush()
-    send_push_to_user(db, user_id, title, message, link)
+
+    return notification
+
+
+def send_notification_push(db: Session, notification: Notification):
+    send_push_to_user(
+        db,
+        notification.user_id,
+        notification.title,
+        notification.message,
+        notification.link,
+    )
 
 
 def can_approve_leaves(db: Session, user: User) -> bool:
@@ -154,14 +172,21 @@ def create_leave_request(
     db.commit()
     db.refresh(leave_request)
 
+    notifications = []
+
     for notify_user in leave_approvers(db, current_db_user):
-        add_notification(
+        notifications.append(add_notification(
             db,
             notify_user.id,
             "Yeni İzin Talebi",
             f"{current_db_user.full_name} yeni bir izin talebi oluşturdu.",
             "/leaves",
-        )
+        ))
+
+    db.commit()
+
+    for notification in notifications:
+        send_notification_push(db, notification)
 
     db.commit()
 
@@ -254,7 +279,7 @@ def approve_leave_request(
     leave.status = "approved"
     leave.approved_by = current_db_user.id
 
-    add_notification(
+    notification = add_notification(
         db,
         leave_user.id,
         "İzin Talebi Onaylandı",
@@ -264,6 +289,8 @@ def approve_leave_request(
 
     db.commit()
     db.refresh(leave)
+    send_notification_push(db, notification)
+    db.commit()
 
     return {
         "message": "İzin onaylandı",
@@ -288,7 +315,7 @@ def reject_leave_request(
     leave.status = "rejected"
     leave.approved_by = current_db_user.id
 
-    add_notification(
+    notification = add_notification(
         db,
         leave_user.id,
         "İzin Talebi Reddedildi",
@@ -298,6 +325,8 @@ def reject_leave_request(
 
     db.commit()
     db.refresh(leave)
+    send_notification_push(db, notification)
+    db.commit()
 
     return {
         "message": "İzin reddedildi",

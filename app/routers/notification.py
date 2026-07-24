@@ -77,6 +77,8 @@ def send_push_to_user(
         except WebPushException as exc:
             if exc.response is not None and exc.response.status_code in [404, 410]:
                 db.delete(subscription)
+        except Exception:
+            continue
 
 
 @router.get("/push/public-key")

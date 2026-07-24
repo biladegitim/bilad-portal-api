@@ -20,7 +20,7 @@ ROLE_ALIASES = {
 
 
 def normalize_role(role: str | None) -> str:
-    return ROLE_ALIASES.get(role or "", "employee")
+    return ROLE_ALIASES.get((role or "").strip().lower(), "employee")
 
 
 def normalize_user_role(db: Session, user: User) -> User:
