@@ -111,7 +111,7 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "approved")
         self.assertIsNotNone(notification)
-        self.assertEqual(notification.link, "/my-leaves")
+        self.assertEqual(notification.link, "/leaves")
 
     def test_leave_request_notifies_actual_approvers(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")
@@ -165,6 +165,48 @@ class RbacAndLeaveTests(unittest.TestCase):
         self.assertIn(admin.id, notified_user_ids)
         self.assertIn(permission_user.id, notified_user_ids)
         self.assertNotIn(unrelated_admin.id, notified_user_ids)
+
+    def test_direct_supervisor_receives_and_can_approve_leave(self):
+        supervisor = self.add_user(
+            "Supervisor",
+            "supervisor@example.com",
+            "employee",
+        )
+        employee = self.add_user(
+            "Employee",
+            "employee-direct@example.com",
+            "employee",
+            supervisor.id,
+        )
+
+        create_leave_request(
+            LeaveCreate(
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow() + timedelta(hours=8),
+                reason="Direct supervisor test",
+            ),
+            {"sub": employee.email, "role": employee.role},
+            self.db,
+        )
+
+        notification = self.db.query(Notification).filter(
+            Notification.user_id == supervisor.id,
+            Notification.link == "/leaves",
+        ).first()
+        leave = self.db.query(LeaveRequest).filter(
+            LeaveRequest.user_id == employee.id,
+        ).first()
+
+        self.assertIsNotNone(notification)
+        self.assertIsNotNone(leave)
+
+        response = approve_leave_request(
+            leave.id,
+            {"sub": supervisor.email, "role": supervisor.role},
+            self.db,
+        )
+
+        self.assertEqual(response["status"], "approved")
 
     def test_admin_cannot_approve_non_subordinate_leave(self):
         admin = self.add_user("Admin", "admin@example.com", "admin")
