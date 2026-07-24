@@ -7,8 +7,10 @@ from app.database.connection import get_db
 from app.models.leave import LeaveRequest
 from app.models.user import User
 from app.models.notification import Notification
+from app.models.permission import Permission, UserPermission
 from app.schemas.leave import LeaveCreate
 from app.core.dependencies import get_current_user
+from app.core.permission import has_permission
 from app.routers.notification import send_push_to_user
 from app.core.rbac import (
     can_manage_user,
@@ -19,6 +21,7 @@ from app.core.rbac import (
 
 
 router = APIRouter()
+LEAVE_APPROVE_PERMISSION = "leave.approve"
 
 
 def serialize_leave(db: Session, leave: LeaveRequest):
@@ -45,6 +48,57 @@ def add_notification(db: Session, user_id: int, title: str, message: str, link: 
     ))
     db.flush()
     send_push_to_user(db, user_id, title, message, link)
+
+
+def can_approve_leaves(db: Session, user: User) -> bool:
+    role = normalize_role(user.role)
+
+    return (
+        role in ["admin", "super_admin"]
+        or has_permission(db, user.id, LEAVE_APPROVE_PERMISSION)
+    )
+
+
+def leave_approvers(db: Session, creator: User) -> list[User]:
+    permission = db.query(Permission).filter(
+        Permission.code == LEAVE_APPROVE_PERMISSION
+    ).first()
+    users_by_id: dict[int, User] = {}
+
+    if creator.supervisor_id:
+        supervisor = db.query(User).filter(
+            User.id == creator.supervisor_id,
+            User.is_active == True,
+        ).first()
+
+        if supervisor and supervisor.id != creator.id:
+            users_by_id[supervisor.id] = supervisor
+
+    role_users = db.query(User).filter(
+        User.is_active == True,
+        User.id != creator.id,
+    ).all()
+
+    for user in role_users:
+        if normalize_role(user.role) == "super_admin":
+            users_by_id[user.id] = user
+
+    if permission:
+        permission_users = (
+            db.query(User)
+            .join(UserPermission, UserPermission.user_id == User.id)
+            .filter(
+                UserPermission.permission_id == permission.id,
+                User.is_active == True,
+                User.id != creator.id,
+            )
+            .all()
+        )
+
+        for user in permission_users:
+            users_by_id[user.id] = user
+
+    return list(users_by_id.values())
 
 
 def require_leave_manager(db: Session, actor: User, leave: LeaveRequest) -> User:
@@ -82,24 +136,7 @@ def create_leave_request(
     db.commit()
     db.refresh(leave_request)
 
-    notify_users = []
-
-    if current_db_user.supervisor_id:
-        supervisor = db.query(User).filter(
-            User.id == current_db_user.supervisor_id
-        ).first()
-
-        if supervisor:
-            notify_users.append(supervisor)
-
-    super_admins = db.query(User).filter(User.role == "super_admin").all()
-    existing_ids = [user.id for user in notify_users]
-
-    for super_admin in super_admins:
-        if super_admin.id not in existing_ids:
-            notify_users.append(super_admin)
-
-    for notify_user in notify_users:
+    for notify_user in leave_approvers(db, current_db_user):
         add_notification(
             db,
             notify_user.id,
@@ -151,10 +188,20 @@ def get_team_leaves(
 ):
     current_db_user = get_db_user_from_token(db, current_user)
 
-    if normalize_role(current_db_user.role) == "employee":
+    if not can_approve_leaves(db, current_db_user):
         raise HTTPException(status_code=403, detail="İzinleri görüntüleme yetkiniz yok")
 
-    user_ids = scoped_user_ids(db, current_db_user)
+    if (
+        normalize_role(current_db_user.role) == "super_admin"
+        or has_permission(db, current_db_user.id, LEAVE_APPROVE_PERMISSION)
+    ):
+        user_ids = [
+            user.id
+            for user in db.query(User).filter(User.is_active == True).all()
+            if user.id != current_db_user.id
+        ]
+    else:
+        user_ids = scoped_user_ids(db, current_db_user)
 
     leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id.in_(user_ids or [-1])
@@ -182,7 +229,13 @@ def approve_leave_request(
     if not leave:
         raise HTTPException(status_code=404, detail="İzin talebi bulunamadı")
 
-    leave_user = require_leave_manager(db, current_db_user, leave)
+    if has_permission(db, current_db_user.id, LEAVE_APPROVE_PERMISSION):
+        leave_user = db.query(User).filter(User.id == leave.user_id).first()
+
+        if not leave_user or leave_user.id == current_db_user.id:
+            raise HTTPException(status_code=403, detail="Bu izni yonetemezsiniz")
+    else:
+        leave_user = require_leave_manager(db, current_db_user, leave)
     leave.status = "approved"
     leave.approved_by = current_db_user.id
 
@@ -216,7 +269,13 @@ def reject_leave_request(
     if not leave:
         raise HTTPException(status_code=404, detail="İzin talebi bulunamadı")
 
-    leave_user = require_leave_manager(db, current_db_user, leave)
+    if has_permission(db, current_db_user.id, LEAVE_APPROVE_PERMISSION):
+        leave_user = db.query(User).filter(User.id == leave.user_id).first()
+
+        if not leave_user or leave_user.id == current_db_user.id:
+            raise HTTPException(status_code=403, detail="Bu izni yonetemezsiniz")
+    else:
+        leave_user = require_leave_manager(db, current_db_user, leave)
     leave.status = "rejected"
     leave.approved_by = current_db_user.id
 
