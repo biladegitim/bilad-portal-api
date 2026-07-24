@@ -13,7 +13,7 @@ from app.models.qr import QRToken
 from app.models.attendance import AttendanceRecord
 from app.models.user import User
 from app.schemas.attendance import AttendanceScan
-from app.core.dependencies import admin_required, get_current_user
+from app.core.dependencies import admin_required, get_current_user, qr_display_required
 from app.core.rbac import get_db_user_from_token, normalize_role, scoped_users_query
 
 
@@ -64,7 +64,7 @@ def serialize_daily_report(user: User, records: list[AttendanceRecord]):
 
 @router.get("/qr/current")
 def get_current_qr(
-    current_user: dict = Depends(admin_required),
+    current_user: dict = Depends(qr_display_required),
     db: Session = Depends(get_db),
 ):
     qr_token = QRToken()
