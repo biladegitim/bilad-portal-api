@@ -1,4 +1,5 @@
 ﻿from datetime import datetime, timedelta
+from calendar import monthrange
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.models.qr import QRToken
 from app.models.attendance import AttendanceRecord
+from app.models.leave import LeaveRequest
 from app.models.user import User
 from app.schemas.attendance import AttendanceScan
 from app.core.dependencies import admin_required, get_current_user, qr_display_required
@@ -18,6 +20,14 @@ from app.core.rbac import get_db_user_from_token, normalize_role, scoped_users_q
 
 
 router = APIRouter()
+
+
+def each_date(start_date, end_date):
+    current_date = start_date
+
+    while current_date <= end_date:
+        yield current_date
+        current_date += timedelta(days=1)
 
 
 def serialize_daily_report(user: User, records: list[AttendanceRecord]):
@@ -295,6 +305,7 @@ def export_attendance_excel(
 
     now_utc = datetime.utcnow()
     turkey_offset = timedelta(hours=3)
+    now_local = now_utc + turkey_offset
     tolerance = timedelta(minutes=10)
 
     records = db.query(AttendanceRecord).filter(
@@ -311,10 +322,31 @@ def export_attendance_excel(
         key = (record.user_id, local_time.date())
         records_by_user_day.setdefault(key, []).append((record, local_time))
 
+    today = now_local.date()
+    today_end_local = datetime.combine(today, datetime.max.time())
+    approved_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.user_id.in_(user_ids or [-1]),
+        LeaveRequest.status == "approved",
+        LeaveRequest.start_time <= today_end_local,
+    ).all()
+    leaves_by_user_day = {}
+
+    for leave in approved_leaves:
+        leave_start = leave.start_time.date()
+        leave_end = min(leave.end_time.date(), today)
+
+        if leave_end < leave_start:
+            continue
+
+        for leave_date in each_date(leave_start, leave_end):
+            leaves_by_user_day.setdefault((leave.user_id, leave_date), []).append(leave)
+
     header_fill = PatternFill("solid", fgColor="DCEBFF")
     header_font = Font(bold=True, color="1F2937")
     warning_fill = PatternFill("solid", fgColor="FEE2E2")
     warning_font = Font(bold=True, color="B91C1C")
+    leave_fill = PatternFill("solid", fgColor="DBEAFE")
+    leave_font = Font(bold=True, color="1D4ED8")
     center_alignment = Alignment(horizontal="center", vertical="center")
     month_names = {
         1: "Ocak",
@@ -331,10 +363,13 @@ def export_attendance_excel(
         12: "Aralik",
     }
 
-    report_months = sorted(
-        {(record_date.year, record_date.month) for _, record_date in records_by_user_day.keys()}
-    )
-    today = (now_utc + turkey_offset).date()
+    report_months = sorted({
+        (record_date.year, record_date.month)
+        for _, record_date in [
+            *records_by_user_day.keys(),
+            *leaves_by_user_day.keys(),
+        ]
+    })
     current_month = (today.year, today.month)
 
     if current_month not in report_months:
@@ -345,7 +380,7 @@ def export_attendance_excel(
 
     for year, month in report_months:
         ws = wb.create_sheet(title=f"{month_names[month]} {year}")
-        ws.append(["Tarih", "Ad Soyad", "Giriş Saati", "Çıkış Saati"])
+        ws.append(["Tarih", "Ad Soyad", "Giriş Saati", "Çıkış Saati", "Durum"])
 
         for cell in ws[1]:
             cell.fill = header_fill
@@ -354,15 +389,36 @@ def export_attendance_excel(
 
         row_index = 2
 
+        month_start = datetime(year, month, 1).date()
+        month_end = datetime(year, month, monthrange(year, month)[1]).date()
+
+        if (year, month) == current_month:
+            month_end = today
+
         for user in users:
-            user_days = sorted(
-                day
-                for (user_id, day) in records_by_user_day.keys()
-                if user_id == user.id and day.year == year and day.month == month
-            )
+            user_days = list(each_date(month_start, month_end))
 
             for record_date in user_days:
-                day_records = records_by_user_day[(user.id, record_date)]
+                day_records = records_by_user_day.get((user.id, record_date), [])
+                approved_day_leaves = leaves_by_user_day.get((user.id, record_date), [])
+                has_approved_leave = bool(approved_day_leaves)
+
+                if not day_records and record_date.weekday() == 6 and not has_approved_leave:
+                    continue
+
+                if (
+                    not day_records
+                    and not has_approved_leave
+                    and record_date == today
+                ):
+                    if not user.work_end_time:
+                        continue
+
+                    expected_end_today = datetime.combine(record_date, user.work_end_time)
+
+                    if now_local <= expected_end_today + tolerance:
+                        continue
+
                 check_ins = [
                     local_time
                     for record, local_time in day_records
@@ -376,16 +432,24 @@ def export_attendance_excel(
 
                 first_entry = check_ins[0] if check_ins else None
                 last_exit = check_outs[-1] if check_outs else None
+                status = ""
+
+                if has_approved_leave:
+                    status = "İzinli"
+                elif not day_records:
+                    status = "Gelmedi"
 
                 ws.append([
                     record_date.strftime("%d.%m.%Y"),
                     user.full_name,
                     first_entry.strftime("%H:%M") if first_entry else "-",
                     last_exit.strftime("%H:%M") if last_exit else "-",
+                    status,
                 ])
 
                 entry_cell = ws.cell(row=row_index, column=3)
                 exit_cell = ws.cell(row=row_index, column=4)
+                status_cell = ws.cell(row=row_index, column=5)
 
                 if user.work_start_time and first_entry:
                     expected_start = datetime.combine(record_date, user.work_start_time)
@@ -399,12 +463,19 @@ def export_attendance_excel(
                         exit_cell.fill = warning_fill
                         exit_cell.font = warning_font
 
+                if status == "Gelmedi":
+                    status_cell.fill = warning_fill
+                    status_cell.font = warning_font
+                elif status == "İzinli":
+                    status_cell.fill = leave_fill
+                    status_cell.font = leave_font
+
                 for cell in ws[row_index]:
                     cell.alignment = center_alignment
 
                 row_index += 1
 
-        widths = [14, 28, 16, 16]
+        widths = [14, 28, 16, 16, 16]
         for index, width in enumerate(widths, start=1):
             ws.column_dimensions[get_column_letter(index)].width = width
 
