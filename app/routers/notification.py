@@ -14,6 +14,7 @@ from app.core.rbac import get_db_user_from_token
 
 
 router = APIRouter()
+LEAVE_NOTIFICATION_LINKS = ["/leaves", "/my-leaves"]
 
 
 def get_vapid_public_key():
@@ -151,6 +152,21 @@ def get_notifications(
     }
 
 
+@router.get("/notifications/leaves/unread-count")
+def get_unread_leave_notification_count(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = get_db_user_from_token(db, current_user)
+    unread_count = db.query(Notification).filter(
+        Notification.user_id == user.id,
+        Notification.is_read == False,
+        Notification.link.in_(LEAVE_NOTIFICATION_LINKS),
+    ).count()
+
+    return {"unread_count": unread_count}
+
+
 @router.patch("/notifications/{notification_id}/read")
 def mark_notification_read(
     notification_id: int,
@@ -203,7 +219,7 @@ def mark_leave_notifications_read(
     notifications = db.query(Notification).filter(
         Notification.user_id == user.id,
         Notification.is_read == False,
-        Notification.link == "/leaves",
+        Notification.link.in_(LEAVE_NOTIFICATION_LINKS),
     ).all()
 
     for notification in notifications:

@@ -226,7 +226,7 @@ def approve_leave_request(
         leave_user.id,
         "İzin Talebi Onaylandı",
         "İzin talebiniz onaylandı.",
-        "/my-leaves",
+        "/leaves",
     )
 
     db.commit()
@@ -266,7 +266,7 @@ def reject_leave_request(
         leave_user.id,
         "İzin Talebi Reddedildi",
         "İzin talebiniz reddedildi.",
-        "/my-leaves",
+        "/leaves",
     )
 
     db.commit()
