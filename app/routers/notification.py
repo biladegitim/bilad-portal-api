@@ -43,11 +43,20 @@ def send_push_to_user(
     message: str,
     link: str,
 ):
+    stats = {
+        "enabled": False,
+        "subscriptions": 0,
+        "sent": 0,
+        "deleted": 0,
+        "failed": 0,
+    }
     private_key = get_vapid_private_key()
     public_key = get_vapid_public_key()
 
     if not private_key or not public_key:
-        return
+        return stats
+
+    stats["enabled"] = True
 
     unread_count = db.query(Notification).filter(
         Notification.user_id == user_id,
@@ -57,6 +66,7 @@ def send_push_to_user(
     subscriptions = db.query(PushSubscription).filter(
         PushSubscription.user_id == user_id
     ).all()
+    stats["subscriptions"] = len(subscriptions)
 
     for subscription in subscriptions:
         try:
@@ -74,11 +84,18 @@ def send_push_to_user(
                     "sub": os.getenv("VAPID_SUBJECT", "mailto:admin@bilad.local")
                 },
             )
+            stats["sent"] += 1
         except WebPushException as exc:
             if exc.response is not None and exc.response.status_code in [404, 410]:
                 db.delete(subscription)
+                stats["deleted"] += 1
+            else:
+                stats["failed"] += 1
         except Exception:
+            stats["failed"] += 1
             continue
+
+    return stats
 
 
 @router.get("/push/public-key")
@@ -193,6 +210,27 @@ def get_push_status(
         "push_enabled": bool(get_vapid_public_key() and get_vapid_private_key()),
         "push_subscription_count": subscription_count,
         "unread_leave_count": unread_leave_count,
+    }
+
+
+@router.post("/notifications/push/test")
+def send_test_push(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = get_db_user_from_token(db, current_user)
+    stats = send_push_to_user(
+        db,
+        user.id,
+        "Bilad Portal",
+        "Telefon bildirimi test mesajı.",
+        "/",
+    )
+    db.commit()
+
+    return {
+        "message": "Test bildirimi denendi",
+        "push": stats,
     }
 
 
