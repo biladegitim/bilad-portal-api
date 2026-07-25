@@ -546,12 +546,28 @@ def delete_room_reservation(
     if not is_approver and reservation.status == "approved":
         raise HTTPException(status_code=403, detail="Onaylı programı silme yetkiniz yok")
 
-    db.delete(reservation)
+    matching_reservations = db.query(RoomReservation).filter(
+        RoomReservation.room_id == reservation.room_id,
+        RoomReservation.title == reservation.title,
+        RoomReservation.description == reservation.description,
+        RoomReservation.start_date == reservation.start_date,
+        RoomReservation.end_date == reservation.end_date,
+        RoomReservation.start_time == reservation.start_time,
+        RoomReservation.end_time == reservation.end_time,
+        RoomReservation.created_by == reservation.created_by,
+        RoomReservation.status == reservation.status,
+    ).all()
+    deleted_ids = [item.id for item in matching_reservations]
+
+    for item in matching_reservations:
+        db.delete(item)
+
     db.commit()
 
     return {
         "message": "Rezervasyon silindi",
         "reservation_id": reservation_id,
+        "reservation_ids": deleted_ids,
     }
 
 
