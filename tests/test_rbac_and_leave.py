@@ -16,9 +16,11 @@ from app.models.qr import QRToken
 from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
+from app.routers.event import create_event
 from app.routers.leave import approve_leave_request, create_leave_request, delete_leave_request
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.user import delete_user, purge_inactive_users
+from app.schemas.event import EventCreate
 from app.schemas.leave import LeaveCreate
 from app.schemas.permission import UserPermissionCreate
 from app.core.security import hash_password
@@ -451,6 +453,33 @@ class RbacAndLeaveTests(unittest.TestCase):
         )
 
         self.assertEqual(response["permission"], "attendance.view")
+
+    def test_create_event_notifies_all_active_users(self):
+        creator = self.add_user("Creator", "creator@example.com", "super_admin")
+        employee = self.add_user("Employee", "employee@example.com", "employee")
+        inactive = self.add_user("Inactive", "inactive-event@example.com", "employee")
+        inactive.is_active = False
+        self.db.commit()
+
+        response = create_event(
+            EventCreate(
+                title="Toplantı",
+                description="Genel toplantı",
+                location="Salon",
+                start_time=datetime.utcnow() + timedelta(days=1),
+            ),
+            {"sub": creator.email, "role": creator.role},
+            self.db,
+        )
+        notified_user_ids = {
+            notification.user_id
+            for notification in self.db.query(Notification).filter(
+                Notification.link == "/events",
+            )
+        }
+
+        self.assertIsNotNone(response["event_id"])
+        self.assertEqual(notified_user_ids, {creator.id, employee.id})
 
 
 if __name__ == "__main__":

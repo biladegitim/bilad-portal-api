@@ -4,7 +4,9 @@ from datetime import datetime, date, time
 
 from app.database.connection import get_db
 from app.models.event import Event
+from app.models.notification import Notification
 from app.models.user import User
+from app.routers.notification import send_push_to_user
 from app.schemas.event import EventCreate, EventUpdate
 from app.core.dependencies import get_current_user
 from app.core.timezone import turkey_now
@@ -58,8 +60,32 @@ def create_event(
     )
 
     db.add(event)
+    db.flush()
+
+    notification_title = "Yeni etkinlik oluşturuldu"
+    notification_message = f"{event.title} etkinliği takvime eklendi."
+    notification_link = "/events"
+    recipients = db.query(User).filter(User.is_active == True).all()
+
+    for recipient in recipients:
+        db.add(Notification(
+            user_id=recipient.id,
+            title=notification_title,
+            message=notification_message,
+            link=notification_link,
+        ))
+
     db.commit()
     db.refresh(event)
+
+    for recipient in recipients:
+        send_push_to_user(
+            db,
+            recipient.id,
+            notification_title,
+            notification_message,
+            notification_link,
+        )
 
     return {
         "message": "Etkinlik oluşturuldu",
