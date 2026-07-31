@@ -17,6 +17,13 @@ from app.models.user import User
 from app.schemas.attendance import AttendanceScan
 from app.core.dependencies import admin_required, get_current_user, qr_display_required
 from app.core.rbac import get_db_user_from_token, normalize_role, scoped_users_query
+from app.core.timezone import (
+    TURKEY_OFFSET,
+    turkey_day_bounds_as_utc,
+    turkey_today,
+    utc_now,
+    utc_to_turkey,
+)
 
 
 router = APIRouter()
@@ -34,8 +41,9 @@ def serialize_daily_report(user: User, records: list[AttendanceRecord]):
     daily_records = {}
 
     for record in records:
-        record_date = record.record_time.date()
-        daily_records.setdefault(record_date, []).append(record)
+        local_time = utc_to_turkey(record.record_time)
+        record_date = local_time.date()
+        daily_records.setdefault(record_date, []).append((record, local_time))
 
     user_report = []
 
@@ -43,12 +51,12 @@ def serialize_daily_report(user: User, records: list[AttendanceRecord]):
         first_entry = None
         last_exit = None
 
-        for record in day_records:
+        for record, local_time in day_records:
             if record.record_type == "check_in" and not first_entry:
-                first_entry = record.record_time
+                first_entry = local_time
 
             if record.record_type == "check_out":
-                last_exit = record.record_time
+                last_exit = local_time
 
         late = False
         early_exit = False
@@ -103,7 +111,7 @@ def scan_attendance(
     if qr_token.is_used:
         raise HTTPException(status_code=400, detail="Bu QR kod daha Ã¶nce kullanÄ±lmÄ±ÅŸ")
 
-    if qr_token.expires_at < datetime.utcnow():
+    if qr_token.expires_at < utc_now():
         raise HTTPException(status_code=400, detail="QR kodun sÃ¼resi dolmuÅŸ")
 
     user = get_db_user_from_token(db, current_user)
@@ -117,8 +125,8 @@ def scan_attendance(
                 detail="Bu hesap farklÄ± bir cihaza tanÄ±mlÄ±",
             )
 
-    today = datetime.utcnow().date()
-    today_start = datetime.combine(today, datetime.min.time())
+    today = turkey_today()
+    today_start, _ = turkey_day_bounds_as_utc(today)
 
     last_record = db.query(AttendanceRecord).filter(
         AttendanceRecord.user_id == user.id,
@@ -132,7 +140,7 @@ def scan_attendance(
     attendance = AttendanceRecord(
         user_id=user.id,
         record_type=record_type,
-        record_time=datetime.utcnow(),
+        record_time=utc_now(),
         source="dynamic_qr",
     )
 
@@ -155,12 +163,13 @@ def get_today_attendance(
     db: Session = Depends(get_db),
 ):
     user = get_db_user_from_token(db, current_user)
-    today = datetime.utcnow().date()
+    today = turkey_today()
+    today_start, today_end = turkey_day_bounds_as_utc(today)
 
     records = db.query(AttendanceRecord).filter(
         AttendanceRecord.user_id == user.id,
-        AttendanceRecord.record_time >= datetime.combine(today, datetime.min.time()),
-        AttendanceRecord.record_time <= datetime.combine(today, datetime.max.time()),
+        AttendanceRecord.record_time >= today_start,
+        AttendanceRecord.record_time <= today_end,
     ).order_by(
         AttendanceRecord.record_time.asc()
     ).all()
@@ -191,14 +200,15 @@ def get_weekly_report(
     current_db_user = get_db_user_from_token(db, current_user)
     users = scoped_users_query(db, current_db_user).order_by(User.id.asc()).all()
 
-    today = datetime.utcnow().date()
+    today = turkey_today()
     week_ago = today - timedelta(days=7)
+    week_ago_start, _ = turkey_day_bounds_as_utc(week_ago)
     report_data = []
 
     for user in users:
         attendance_records = db.query(AttendanceRecord).filter(
             AttendanceRecord.user_id == user.id,
-            AttendanceRecord.record_time >= datetime.combine(week_ago, datetime.min.time()),
+            AttendanceRecord.record_time >= week_ago_start,
         ).order_by(
             AttendanceRecord.record_time.asc()
         ).all()
@@ -222,9 +232,8 @@ def get_attendance_dashboard(
     users = scoped_users_query(db, current_db_user).order_by(User.id.asc()).all()
     user_ids = [user.id for user in users]
 
-    today = datetime.utcnow().date()
-    today_start = datetime.combine(today, datetime.min.time())
-    today_end = datetime.combine(today, datetime.max.time())
+    today = turkey_today()
+    today_start, today_end = turkey_day_bounds_as_utc(today)
 
     today_records = db.query(AttendanceRecord).filter(
         AttendanceRecord.user_id.in_(user_ids or [-1]),
@@ -258,8 +267,9 @@ def get_attendance_dashboard(
         late = False
 
         if first_entry and user.work_start_time:
+            first_entry_local = utc_to_turkey(first_entry)
             expected_start = datetime.combine(today, user.work_start_time)
-            late = first_entry > expected_start
+            late = first_entry_local > expected_start
 
         summary.append({
             "user_id": user.id,
@@ -303,9 +313,9 @@ def export_attendance_excel(
     users = scoped_users_query(db, current_db_user).order_by(User.full_name.asc()).all()
     user_ids = [user.id for user in users]
 
-    now_utc = datetime.utcnow()
-    turkey_offset = timedelta(hours=3)
-    now_local = now_utc + turkey_offset
+    now_utc = utc_now()
+    turkey_offset = TURKEY_OFFSET
+    now_local = utc_to_turkey(now_utc)
     tolerance = timedelta(minutes=10)
 
     records = db.query(AttendanceRecord).filter(

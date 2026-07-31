@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from datetime import date
 
 from app.database.connection import get_db
 from app.models.menu import Menu
@@ -9,6 +8,7 @@ from app.schemas.menu import MenuCreate, MenuUpdate
 from app.core.dependencies import get_current_user
 from app.core.permission import has_permission
 from app.core.rbac import normalize_role
+from app.core.timezone import turkey_today
 
 router = APIRouter()
 
@@ -70,7 +70,7 @@ def create_menu(
 @router.get("/menus/today")
 def get_today_menu(db: Session = Depends(get_db)):
     today_menu = db.query(Menu).filter(
-        Menu.menu_date == date.today()
+        Menu.menu_date == turkey_today()
     ).first()
 
     if not today_menu:

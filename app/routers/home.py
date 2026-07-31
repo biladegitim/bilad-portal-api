@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends
-from datetime import datetime, date
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
+from app.core.timezone import local_day_bounds, turkey_now, turkey_today
 from app.models.event import Event
 from app.models.menu import Menu
 from app.models.leave import LeaveRequest
@@ -13,18 +13,17 @@ router = APIRouter()
 
 @router.get("/home")
 def get_home_data(db: Session = Depends(get_db)):
-    today = datetime.utcnow().date()
-    today_start = datetime.combine(today, datetime.min.time())
-    today_end = datetime.combine(today, datetime.max.time())
+    today = turkey_today()
+    today_start, today_end = local_day_bounds(today)
 
     upcoming_events = db.query(Event).filter(
-        Event.start_time >= datetime.utcnow()
+        Event.start_time >= turkey_now()
     ).order_by(
         Event.start_time.asc()
     ).limit(5).all()
 
     today_menu = db.query(Menu).filter(
-        Menu.menu_date == date.today()
+        Menu.menu_date == today
     ).first()
 
     approved_leaves = db.query(LeaveRequest).filter(

@@ -7,6 +7,7 @@ from app.models.event import Event
 from app.models.user import User
 from app.schemas.event import EventCreate, EventUpdate
 from app.core.dependencies import get_current_user
+from app.core.timezone import turkey_now
 
 router = APIRouter()
 
@@ -131,7 +132,7 @@ def delete_event(
 @router.get("/events/upcoming")
 def get_upcoming_events(db: Session = Depends(get_db)):
     events = db.query(Event).filter(
-        Event.start_time >= datetime.utcnow()
+        Event.start_time >= turkey_now()
     ).order_by(Event.start_time.asc()).limit(10).all()
 
     return {

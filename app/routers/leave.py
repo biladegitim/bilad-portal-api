@@ -10,6 +10,7 @@ from app.models.notification import Notification
 from app.schemas.leave import LeaveCreate
 from app.core.dependencies import get_current_user
 from app.core.permission import has_permission
+from app.core.timezone import local_day_bounds, turkey_today
 from app.routers.notification import send_push_to_user
 from app.core.rbac import (
     can_manage_user,
@@ -361,9 +362,8 @@ def delete_leave_request(
 
 @router.get("/leaves/today-approved")
 def get_today_approved_leaves(db: Session = Depends(get_db)):
-    today = datetime.utcnow().date()
-    today_start = datetime.combine(today, datetime.min.time())
-    today_end = datetime.combine(today, datetime.max.time())
+    today = turkey_today()
+    today_start, today_end = local_day_bounds(today)
 
     leaves = db.query(LeaveRequest).filter(
         LeaveRequest.status == "approved",
