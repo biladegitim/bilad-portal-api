@@ -22,6 +22,61 @@ from app.core.rbac import (
 
 router = APIRouter()
 LEAVE_APPROVE_PERMISSION = "leave.approve"
+ANNUAL_LEAVE_TYPE = "annual"
+
+
+def normalize_leave_type(leave_type: str | None) -> str:
+    return ANNUAL_LEAVE_TYPE if leave_type == ANNUAL_LEAVE_TYPE else "standard"
+
+
+def leave_day_count(start_time: datetime, end_time: datetime) -> int:
+    if end_time < start_time:
+        raise HTTPException(
+            status_code=400,
+            detail="İzin bitiş tarihi başlangıçtan önce olamaz",
+        )
+
+    return max((end_time.date() - start_time.date()).days + 1, 1)
+
+
+def annual_leave_used_days(db: Session, user_id: int) -> int:
+    approved_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.user_id == user_id,
+        LeaveRequest.leave_type == ANNUAL_LEAVE_TYPE,
+        LeaveRequest.status == "approved",
+    ).all()
+
+    return sum(
+        leave_day_count(leave.start_time, leave.end_time)
+        for leave in approved_leaves
+    )
+
+
+def annual_leave_pending_days(db: Session, user_id: int) -> int:
+    pending_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.user_id == user_id,
+        LeaveRequest.leave_type == ANNUAL_LEAVE_TYPE,
+        LeaveRequest.status == "pending",
+    ).all()
+
+    return sum(
+        leave_day_count(leave.start_time, leave.end_time)
+        for leave in pending_leaves
+    )
+
+
+def annual_leave_balance(db: Session, user: User) -> dict:
+    total_days = user.annual_leave_days or 0
+    used_days = annual_leave_used_days(db, user.id)
+    pending_days = annual_leave_pending_days(db, user.id)
+
+    return {
+        "total_days": total_days,
+        "used_days": used_days,
+        "pending_days": pending_days,
+        "remaining_days": max(total_days - used_days, 0),
+        "available_days": max(total_days - used_days - pending_days, 0),
+    }
 
 
 def serialize_leave(db: Session, leave: LeaveRequest):
@@ -34,6 +89,8 @@ def serialize_leave(db: Session, leave: LeaveRequest):
         "start_time": leave.start_time,
         "end_time": leave.end_time,
         "reason": leave.reason,
+        "leave_type": normalize_leave_type(leave.leave_type),
+        "day_count": leave_day_count(leave.start_time, leave.end_time),
         "status": leave.status,
         "approved_by": leave.approved_by,
     }
@@ -160,12 +217,24 @@ def create_leave_request(
     db: Session = Depends(get_db),
 ):
     current_db_user = get_db_user_from_token(db, current_user)
+    leave_type = normalize_leave_type(data.leave_type)
+    requested_days = leave_day_count(data.start_time, data.end_time)
+
+    if leave_type == ANNUAL_LEAVE_TYPE:
+        balance = annual_leave_balance(db, current_db_user)
+
+        if requested_days > balance["available_days"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Yıllık izin hakkınız kalmadı",
+            )
 
     leave_request = LeaveRequest(
         user_id=current_db_user.id,
         start_time=data.start_time,
         end_time=data.end_time,
         reason=data.reason,
+        leave_type=leave_type,
         status="pending",
     )
 
@@ -217,11 +286,14 @@ def get_my_leaves(
                 "start_time": leave.start_time,
                 "end_time": leave.end_time,
                 "reason": leave.reason,
+                "leave_type": normalize_leave_type(leave.leave_type),
+                "day_count": leave_day_count(leave.start_time, leave.end_time),
                 "status": leave.status,
                 "approved_by": leave.approved_by,
             }
             for leave in leaves
-        ]
+        ],
+        "annual_leave_balance": annual_leave_balance(db, user),
     }
 
 
@@ -264,6 +336,47 @@ def get_team_leaves(
     }
 
 
+@router.get("/annual-leave-balances")
+def get_annual_leave_balances(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_db_user = get_db_user_from_token(db, current_user)
+
+    if can_approve_leaves(db, current_db_user):
+        if normalize_role(current_db_user.role) == "super_admin" or has_permission(
+            db,
+            current_db_user.id,
+            LEAVE_APPROVE_PERMISSION,
+        ):
+            users = db.query(User).filter(User.is_active == True).order_by(
+                User.full_name.asc()
+            ).all()
+        elif normalize_role(current_db_user.role) == "admin":
+            user_ids = scoped_user_ids(db, current_db_user)
+            users = db.query(User).filter(User.id.in_(user_ids or [-1])).order_by(
+                User.full_name.asc()
+            ).all()
+        else:
+            user_ids = supervised_user_ids(db, current_db_user)
+            users = db.query(User).filter(User.id.in_(user_ids or [-1])).order_by(
+                User.full_name.asc()
+            ).all()
+    else:
+        users = [current_db_user]
+
+    return {
+        "balances": [
+            {
+                "user_id": user.id,
+                "full_name": user.full_name,
+                **annual_leave_balance(db, user),
+            }
+            for user in users
+        ]
+    }
+
+
 @router.patch("/leave-requests/{leave_id}/approve")
 def approve_leave_request(
     leave_id: int,
@@ -277,6 +390,17 @@ def approve_leave_request(
         raise HTTPException(status_code=404, detail="İzin talebi bulunamadı")
 
     leave_user = require_leave_manager(db, current_db_user, leave)
+
+    if normalize_leave_type(leave.leave_type) == ANNUAL_LEAVE_TYPE:
+        requested_days = leave_day_count(leave.start_time, leave.end_time)
+        balance = annual_leave_balance(db, leave_user)
+
+        if requested_days > balance["remaining_days"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Kullanıcının yıllık izin hakkı yeterli değil",
+            )
+
     leave.status = "approved"
     leave.approved_by = current_db_user.id
 
@@ -384,6 +508,8 @@ def get_today_approved_leaves(db: Session = Depends(get_db)):
             "start_time": leave.start_time,
             "end_time": leave.end_time,
             "reason": leave.reason,
+            "leave_type": normalize_leave_type(leave.leave_type),
+            "day_count": leave_day_count(leave.start_time, leave.end_time),
         })
 
     return {

@@ -52,6 +52,14 @@ with engine.begin() as connection:
         "ALTER TABLE rooms "
         "ADD COLUMN IF NOT EXISTS floor VARCHAR"
     ))
+    connection.execute(text(
+        "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS annual_leave_days INTEGER NOT NULL DEFAULT 0"
+    ))
+    connection.execute(text(
+        "ALTER TABLE leave_requests "
+        "ADD COLUMN IF NOT EXISTS leave_type VARCHAR NOT NULL DEFAULT 'standard'"
+    ))
 
 app = FastAPI(title="Bilad Portal API")
 

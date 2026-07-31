@@ -14,6 +14,7 @@ class LeaveRequest(Base):
     end_time = Column(DateTime, nullable=False)
 
     reason = Column(String, nullable=True)
+    leave_type = Column(String, default="standard", nullable=False)
 
     status = Column(String, default="pending")
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)

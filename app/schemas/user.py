@@ -26,4 +26,8 @@ class UserOrganizationUpdate(BaseModel):
 class UserWorkHoursUpdate(BaseModel):
     work_start_time: time
     work_end_time: time
+
+
+class UserAnnualLeaveUpdate(BaseModel):
+    annual_leave_days: int
     

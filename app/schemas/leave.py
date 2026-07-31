@@ -8,3 +8,4 @@ class LeaveCreate(BaseModel):
     start_time: datetime
     end_time: datetime
     reason: Optional[str] = None
+    leave_type: Optional[str] = "standard"

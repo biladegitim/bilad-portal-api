@@ -18,6 +18,7 @@ class User(Base):
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     work_start_time = Column(Time, nullable=True)
     work_end_time = Column(Time, nullable=True)
+    annual_leave_days = Column(Integer, default=0, nullable=False)
 
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

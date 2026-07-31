@@ -7,6 +7,7 @@ from app.schemas.user import (
     UserRoleUpdate,
     UserOrganizationUpdate,
     UserWorkHoursUpdate,
+    UserAnnualLeaveUpdate,
 )
 from app.models.user import User
 from app.models.attendance import AttendanceRecord
@@ -88,6 +89,7 @@ def serialize_user(user: User):
         "is_active": user.is_active,
         "work_start_time": str(user.work_start_time) if user.work_start_time else None,
         "work_end_time": str(user.work_end_time) if user.work_end_time else None,
+        "annual_leave_days": user.annual_leave_days or 0,
     }
 
 
@@ -269,6 +271,48 @@ def update_user_work_hours(
             "work_start_time": str(user.work_start_time),
             "work_end_time": str(user.work_end_time),
         },
+    }
+
+
+@router.patch("/users/{user_id}/annual-leave")
+def update_user_annual_leave(
+    user_id: int,
+    data: UserAnnualLeaveUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    actor = get_db_user_from_token(db, current_user)
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    if normalize_role(actor.role) == "employee":
+        raise HTTPException(
+            status_code=403,
+            detail="Yıllık izin hakkı yönetme yetkiniz yok",
+        )
+
+    require_can_manage_user(
+        actor,
+        user,
+        "Bu kullanıcının yıllık izin hakkını yönetemezsiniz",
+    )
+
+    if data.annual_leave_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Yıllık izin gün sayısı negatif olamaz",
+        )
+
+    user.annual_leave_days = data.annual_leave_days
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": "Yıllık izin hakkı güncellendi",
+        "user": serialize_user(user),
     }
 
 
