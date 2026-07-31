@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from datetime import timedelta
 
 from app.database.connection import get_db
 from app.models.menu import Menu
@@ -13,12 +14,24 @@ from app.core.timezone import turkey_today
 router = APIRouter()
 
 
+def purge_old_menus(db: Session) -> int:
+    cutoff_date = turkey_today() - timedelta(days=3)
+    deleted_count = db.query(Menu).filter(
+        Menu.menu_date < cutoff_date
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    return deleted_count
+
+
 @router.post("/menus")
 def create_menu(
     data: MenuCreate,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    purge_old_menus(db)
+
     user = db.query(User).filter(
         User.email == current_user["sub"]
     ).first()
@@ -69,6 +82,8 @@ def create_menu(
 
 @router.get("/menus/today")
 def get_today_menu(db: Session = Depends(get_db)):
+    purge_old_menus(db)
+
     today_menu = db.query(Menu).filter(
         Menu.menu_date == turkey_today()
     ).first()
@@ -84,6 +99,8 @@ def get_today_menu(db: Session = Depends(get_db)):
 
 @router.get("/menus")
 def get_all_menus(db: Session = Depends(get_db)):
+    purge_old_menus(db)
+
     menus = db.query(Menu).order_by(
         Menu.menu_date.desc()
     ).all()

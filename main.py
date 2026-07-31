@@ -29,7 +29,7 @@ from app.routers.attendance import router as attendance_router
 from app.routers.user import router as user_router
 from app.routers.auth import router as auth_router
 from app.routers.leave import router as leave_router
-from app.routers.menu import router as menu_router
+from app.routers.menu import purge_old_menus, router as menu_router
 from app.routers.room import router as room_router
 from app.routers.permission import router as permission_router
 from app.routers.home import router as home_router
@@ -115,6 +115,7 @@ async def event_reminder_loop():
 
         try:
             send_due_event_reminders(db)
+            purge_old_menus(db)
         except Exception:
             db.rollback()
         finally:

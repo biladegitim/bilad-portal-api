@@ -10,13 +10,14 @@ from app.database.base import Base
 from app.models.attendance import AttendanceRecord
 from app.models.event import Event
 from app.models.leave import LeaveRequest
+from app.models.menu import Menu
 from app.models.notification import Notification
 from app.models.permission import Permission, UserPermission
 from app.models.qr import QRToken
 from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
-from app.core.timezone import turkey_now
+from app.core.timezone import turkey_now, turkey_today
 from app.routers.event import create_event, send_due_event_reminders
 from app.routers.leave import (
     approve_leave_request,
@@ -25,6 +26,7 @@ from app.routers.leave import (
     get_team_leaves,
 )
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
+from app.routers.menu import purge_old_menus
 from app.routers.user import delete_user, purge_inactive_users
 from app.schemas.event import EventCreate
 from app.schemas.leave import LeaveCreate
@@ -415,6 +417,27 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(deleted_count, 1)
         self.assertIsNone(self.db.query(User).filter(User.id == inactive.id).first())
+
+    def test_purge_old_menus_removes_entries_older_than_three_days(self):
+        today = turkey_today()
+        old_date = today - timedelta(days=4)
+        boundary_date = today - timedelta(days=3)
+        old_menu = Menu(menu_date=old_date, content="Eski")
+        boundary_menu = Menu(menu_date=boundary_date, content="Sınır")
+        today_menu = Menu(menu_date=today, content="Bugün")
+        self.db.add_all([old_menu, boundary_menu, today_menu])
+        self.db.commit()
+
+        deleted_count = purge_old_menus(self.db)
+        remaining_dates = {
+            menu.menu_date
+            for menu in self.db.query(Menu).all()
+        }
+
+        self.assertEqual(deleted_count, 1)
+        self.assertNotIn(old_date, remaining_dates)
+        self.assertIn(boundary_date, remaining_dates)
+        self.assertIn(today, remaining_dates)
 
     def test_user_permission_updates_are_idempotent(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")
