@@ -1,7 +1,10 @@
+import asyncio
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from io import BytesIO
 
 from fastapi import HTTPException
+from openpyxl import load_workbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -18,6 +21,7 @@ from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
 from app.core.timezone import turkey_now, turkey_today
+from app.routers.attendance import export_attendance_excel
 from app.routers.event import create_event, send_due_event_reminders
 from app.routers.leave import (
     approve_leave_request,
@@ -438,6 +442,33 @@ class RbacAndLeaveTests(unittest.TestCase):
         self.assertNotIn(old_date, remaining_dates)
         self.assertIn(boundary_date, remaining_dates)
         self.assertIn(today, remaining_dates)
+
+    def test_excel_export_excludes_users_without_work_hours(self):
+        super_admin = self.add_user("Super", "super-excel@example.com", "super_admin")
+        scheduled = self.add_user("Scheduled", "scheduled@example.com", "employee")
+        unscheduled = self.add_user("Unscheduled", "unscheduled@example.com", "employee")
+        scheduled.work_start_time = time(9, 0)
+        scheduled.work_end_time = time(18, 0)
+        self.db.commit()
+
+        response = export_attendance_excel(
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        async def read_body():
+            return b"".join([chunk async for chunk in response.body_iterator])
+
+        body = asyncio.run(read_body())
+        workbook = load_workbook(BytesIO(body))
+        names = {
+            row[1]
+            for sheet in workbook.worksheets
+            for row in sheet.iter_rows(min_row=2, values_only=True)
+            if row[1]
+        }
+
+        self.assertIn("Scheduled", names)
+        self.assertNotIn("Unscheduled", names)
 
     def test_user_permission_updates_are_idempotent(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")

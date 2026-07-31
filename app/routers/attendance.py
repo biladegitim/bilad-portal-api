@@ -310,7 +310,10 @@ def export_attendance_excel(
     db: Session = Depends(get_db),
 ):
     current_db_user = get_db_user_from_token(db, current_user)
-    users = scoped_users_query(db, current_db_user).order_by(User.full_name.asc()).all()
+    users = scoped_users_query(db, current_db_user).filter(
+        User.work_start_time.isnot(None),
+        User.work_end_time.isnot(None),
+    ).order_by(User.full_name.asc()).all()
     user_ids = [user.id for user in users]
 
     now_utc = utc_now()
