@@ -39,38 +39,61 @@ def leave_day_count(start_time: datetime, end_time: datetime) -> int:
     return max((end_time.date() - start_time.date()).days + 1, 1)
 
 
-def annual_leave_used_days(db: Session, user_id: int) -> int:
+def annual_leave_year_bounds(year: int):
+    return datetime(year, 1, 1), datetime(year, 12, 31, 23, 59, 59)
+
+
+def annual_leave_days_in_year(leave: LeaveRequest, year: int) -> int:
+    year_start, year_end = annual_leave_year_bounds(year)
+    start_time = max(leave.start_time, year_start)
+    end_time = min(leave.end_time, year_end)
+
+    if end_time < start_time:
+        return 0
+
+    return leave_day_count(start_time, end_time)
+
+
+def annual_leave_used_days(db: Session, user_id: int, year: int) -> int:
+    year_start, year_end = annual_leave_year_bounds(year)
     approved_leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id == user_id,
         LeaveRequest.leave_type == ANNUAL_LEAVE_TYPE,
         LeaveRequest.status == "approved",
+        LeaveRequest.start_time <= year_end,
+        LeaveRequest.end_time >= year_start,
     ).all()
 
     return sum(
-        leave_day_count(leave.start_time, leave.end_time)
+        annual_leave_days_in_year(leave, year)
         for leave in approved_leaves
     )
 
 
-def annual_leave_pending_days(db: Session, user_id: int) -> int:
+def annual_leave_pending_days(db: Session, user_id: int, year: int) -> int:
+    year_start, year_end = annual_leave_year_bounds(year)
     pending_leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id == user_id,
         LeaveRequest.leave_type == ANNUAL_LEAVE_TYPE,
         LeaveRequest.status == "pending",
+        LeaveRequest.start_time <= year_end,
+        LeaveRequest.end_time >= year_start,
     ).all()
 
     return sum(
-        leave_day_count(leave.start_time, leave.end_time)
+        annual_leave_days_in_year(leave, year)
         for leave in pending_leaves
     )
 
 
-def annual_leave_balance(db: Session, user: User) -> dict:
+def annual_leave_balance(db: Session, user: User, year: int | None = None) -> dict:
+    selected_year = year or turkey_today().year
     total_days = user.annual_leave_days or 0
-    used_days = annual_leave_used_days(db, user.id)
-    pending_days = annual_leave_pending_days(db, user.id)
+    used_days = annual_leave_used_days(db, user.id, selected_year)
+    pending_days = annual_leave_pending_days(db, user.id, selected_year)
 
     return {
+        "year": selected_year,
         "total_days": total_days,
         "used_days": used_days,
         "pending_days": pending_days,
@@ -221,12 +244,18 @@ def create_leave_request(
     requested_days = leave_day_count(data.start_time, data.end_time)
 
     if leave_type == ANNUAL_LEAVE_TYPE:
-        balance = annual_leave_balance(db, current_db_user)
+        if data.start_time.year != data.end_time.year:
+            raise HTTPException(
+                status_code=400,
+                detail="Yıllık izin talebi tek takvim yılı içinde olmalıdır",
+            )
+
+        balance = annual_leave_balance(db, current_db_user, data.start_time.year)
 
         if requested_days > balance["available_days"]:
             raise HTTPException(
                 status_code=400,
-                detail="Yıllık izin hakkınız kalmadı",
+                detail=f"{balance['year']} yılı için yıllık izin hakkınız kalmadı",
             )
 
     leave_request = LeaveRequest(
@@ -393,12 +422,12 @@ def approve_leave_request(
 
     if normalize_leave_type(leave.leave_type) == ANNUAL_LEAVE_TYPE:
         requested_days = leave_day_count(leave.start_time, leave.end_time)
-        balance = annual_leave_balance(db, leave_user)
+        balance = annual_leave_balance(db, leave_user, leave.start_time.year)
 
         if requested_days > balance["remaining_days"]:
             raise HTTPException(
                 status_code=400,
-                detail="Kullanıcının yıllık izin hakkı yeterli değil",
+                detail=f"Kullanıcının {balance['year']} yılı yıllık izin hakkı yeterli değil",
             )
 
     leave.status = "approved"
