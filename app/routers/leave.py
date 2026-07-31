@@ -372,10 +372,25 @@ def get_annual_leave_balances(
 ):
     current_db_user = get_db_user_from_token(db, current_user)
 
-    if normalize_role(current_db_user.role) == "super_admin":
-        users = db.query(User).filter(User.is_active == True).order_by(
-            User.full_name.asc()
-        ).all()
+    if can_approve_leaves(db, current_db_user):
+        if normalize_role(current_db_user.role) == "super_admin" or has_permission(
+            db,
+            current_db_user.id,
+            LEAVE_APPROVE_PERMISSION,
+        ):
+            users = db.query(User).filter(User.is_active == True).order_by(
+                User.full_name.asc()
+            ).all()
+        elif normalize_role(current_db_user.role) == "admin":
+            user_ids = scoped_user_ids(db, current_db_user)
+            users = db.query(User).filter(User.id.in_(user_ids or [-1])).order_by(
+                User.full_name.asc()
+            ).all()
+        else:
+            user_ids = supervised_user_ids(db, current_db_user)
+            users = db.query(User).filter(User.id.in_(user_ids or [-1])).order_by(
+                User.full_name.asc()
+            ).all()
     else:
         users = [current_db_user]
 
