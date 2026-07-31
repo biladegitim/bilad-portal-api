@@ -18,7 +18,12 @@ from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
 from app.core.timezone import turkey_now
 from app.routers.event import create_event, send_due_event_reminders
-from app.routers.leave import approve_leave_request, create_leave_request, delete_leave_request
+from app.routers.leave import (
+    approve_leave_request,
+    create_leave_request,
+    delete_leave_request,
+    get_team_leaves,
+)
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.user import delete_user, purge_inactive_users
 from app.schemas.event import EventCreate
@@ -233,6 +238,35 @@ class RbacAndLeaveTests(unittest.TestCase):
             )
 
         self.assertEqual(context.exception.status_code, 403)
+
+    def test_super_admin_can_approve_own_leave(self):
+        super_admin = self.add_user("Super", "super-own@example.com", "super_admin")
+        leave = LeaveRequest(
+            user_id=super_admin.id,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow() + timedelta(hours=8),
+            reason="Own leave",
+            status="pending",
+        )
+        self.db.add(leave)
+        self.db.commit()
+        self.db.refresh(leave)
+
+        team_leaves = get_team_leaves(
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+        response = approve_leave_request(
+            leave.id,
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+
+        self.db.refresh(leave)
+
+        self.assertIn(leave.id, {item["id"] for item in team_leaves["leaves"]})
+        self.assertEqual(response["status"], "approved")
+        self.assertEqual(leave.approved_by, super_admin.id)
 
     def test_user_can_delete_own_approved_leave(self):
         employee = self.add_user("Employee", "employee@example.com", "employee")

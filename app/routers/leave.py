@@ -174,7 +174,7 @@ def supervised_user_ids(db: Session, supervisor: User) -> list[int]:
 
 def can_manage_leave_user(db: Session, actor: User, leave_user: User) -> bool:
     if actor.id == leave_user.id:
-        return False
+        return normalize_role(actor.role) == "super_admin"
 
     return (
         has_permission(db, actor.id, LEAVE_APPROVE_PERMISSION)
@@ -344,7 +344,6 @@ def get_team_leaves(
         user_ids = [
             user.id
             for user in db.query(User).filter(User.is_active == True).all()
-            if user.id != current_db_user.id
         ]
     elif normalize_role(current_db_user.role) == "admin":
         user_ids = scoped_user_ids(db, current_db_user)
