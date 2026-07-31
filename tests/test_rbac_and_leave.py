@@ -16,7 +16,8 @@ from app.models.qr import QRToken
 from app.models.room import Room, RoomReservation
 from app.models.user import User
 from app.core.rbac import normalize_role, scoped_user_ids
-from app.routers.event import create_event
+from app.core.timezone import turkey_now
+from app.routers.event import create_event, send_due_event_reminders
 from app.routers.leave import approve_leave_request, create_leave_request, delete_leave_request
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.user import delete_user, purge_inactive_users
@@ -480,6 +481,41 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertIsNotNone(response["event_id"])
         self.assertEqual(notified_user_ids, {creator.id, employee.id})
+
+    def test_event_reminder_notifies_once_three_hours_before_start(self):
+        creator = self.add_user("Creator", "creator-reminder@example.com", "super_admin")
+        employee = self.add_user("Employee", "employee-reminder@example.com", "employee")
+        due_event = Event(
+            title="Yakın Etkinlik",
+            start_time=turkey_now() + timedelta(hours=2, minutes=55),
+            created_by=creator.id,
+        )
+        later_event = Event(
+            title="Sonraki Etkinlik",
+            start_time=turkey_now() + timedelta(hours=4),
+            created_by=creator.id,
+        )
+        self.db.add_all([due_event, later_event])
+        self.db.commit()
+
+        sent_count = send_due_event_reminders(self.db)
+        second_sent_count = send_due_event_reminders(self.db)
+        reminder_notifications = self.db.query(Notification).filter(
+            Notification.title == "Etkinlik hatırlatması",
+            Notification.link == "/events",
+        ).all()
+
+        self.db.refresh(due_event)
+        self.db.refresh(later_event)
+
+        self.assertEqual(sent_count, 1)
+        self.assertEqual(second_sent_count, 0)
+        self.assertIsNotNone(due_event.reminder_sent_at)
+        self.assertIsNone(later_event.reminder_sent_at)
+        self.assertEqual(
+            {notification.user_id for notification in reminder_notifications},
+            {creator.id, employee.id},
+        )
 
 
 if __name__ == "__main__":

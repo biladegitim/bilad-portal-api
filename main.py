@@ -1,5 +1,8 @@
 ﻿import os
 
+import asyncio
+import contextlib
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +11,7 @@ from sqlalchemy import text
 
 load_dotenv()
 
-from app.database.connection import engine
+from app.database.connection import SessionLocal, engine
 from app.database.base import Base
 
 from app.models.user import User
@@ -21,7 +24,7 @@ from app.models.room import Room, RoomReservation
 from app.models.permission import Permission, UserPermission
 from app.models.push_subscription import PushSubscription
 
-from app.routers.event import router as event_router
+from app.routers.event import router as event_router, send_due_event_reminders
 from app.routers.attendance import router as attendance_router
 from app.routers.user import router as user_router
 from app.routers.auth import router as auth_router
@@ -59,6 +62,10 @@ with engine.begin() as connection:
     connection.execute(text(
         "ALTER TABLE leave_requests "
         "ADD COLUMN IF NOT EXISTS leave_type VARCHAR NOT NULL DEFAULT 'standard'"
+    ))
+    connection.execute(text(
+        "ALTER TABLE events "
+        "ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP"
     ))
 
 app = FastAPI(title="Bilad Portal API")
@@ -100,6 +107,36 @@ app.include_router(permission_router)
 app.include_router(home_router)
 app.include_router(profile_router)
 app.include_router(notification_router)
+
+
+async def event_reminder_loop():
+    while True:
+        db = SessionLocal()
+
+        try:
+            send_due_event_reminders(db)
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
+        await asyncio.sleep(60)
+
+
+@app.on_event("startup")
+async def start_event_reminder_loop():
+    app.state.event_reminder_task = asyncio.create_task(event_reminder_loop())
+
+
+@app.on_event("shutdown")
+async def stop_event_reminder_loop():
+    task = getattr(app.state, "event_reminder_task", None)
+
+    if task:
+        task.cancel()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 @app.get("/")

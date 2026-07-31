@@ -21,3 +21,4 @@ class Event(Base):
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    reminder_sent_at = Column(DateTime, nullable=True)

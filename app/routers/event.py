@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 
 from app.database.connection import get_db
 from app.models.event import Event
@@ -12,6 +12,71 @@ from app.core.dependencies import get_current_user
 from app.core.timezone import turkey_now
 
 router = APIRouter()
+EVENT_NOTIFICATION_LINK = "/events"
+
+
+def active_user_ids(db: Session) -> list[int]:
+    return [
+        user_id
+        for (user_id,) in db.query(User.id).filter(User.is_active == True).all()
+    ]
+
+
+def add_event_notifications(
+    db: Session,
+    user_ids: list[int],
+    title: str,
+    message: str,
+    link: str = EVENT_NOTIFICATION_LINK,
+):
+    for user_id in user_ids:
+        db.add(Notification(
+            user_id=user_id,
+            title=title,
+            message=message,
+            link=link,
+        ))
+
+
+def send_event_pushes(
+    db: Session,
+    user_ids: list[int],
+    title: str,
+    message: str,
+    link: str = EVENT_NOTIFICATION_LINK,
+):
+    for user_id in user_ids:
+        send_push_to_user(db, user_id, title, message, link)
+
+
+def send_due_event_reminders(db: Session) -> int:
+    now = turkey_now()
+    reminder_until = now + timedelta(hours=3)
+    due_events = db.query(Event).filter(
+        Event.reminder_sent_at == None,
+        Event.start_time > now,
+        Event.start_time <= reminder_until,
+    ).all()
+
+    if not due_events:
+        return 0
+
+    recipient_ids = active_user_ids(db)
+
+    for event in due_events:
+        title = "Etkinlik hatırlatması"
+        message = f"{event.title} etkinliği 3 saat içinde başlayacak."
+        add_event_notifications(db, recipient_ids, title, message)
+        event.reminder_sent_at = now
+
+    db.commit()
+
+    for event in due_events:
+        title = "Etkinlik hatırlatması"
+        message = f"{event.title} etkinliği 3 saat içinde başlayacak."
+        send_event_pushes(db, recipient_ids, title, message)
+
+    return len(due_events)
 
 
 @router.get("/events")
@@ -64,28 +129,13 @@ def create_event(
 
     notification_title = "Yeni etkinlik oluşturuldu"
     notification_message = f"{event.title} etkinliği takvime eklendi."
-    notification_link = "/events"
-    recipients = db.query(User).filter(User.is_active == True).all()
-
-    for recipient in recipients:
-        db.add(Notification(
-            user_id=recipient.id,
-            title=notification_title,
-            message=notification_message,
-            link=notification_link,
-        ))
+    recipient_ids = active_user_ids(db)
+    add_event_notifications(db, recipient_ids, notification_title, notification_message)
 
     db.commit()
     db.refresh(event)
 
-    for recipient in recipients:
-        send_push_to_user(
-            db,
-            recipient.id,
-            notification_title,
-            notification_message,
-            notification_link,
-        )
+    send_event_pushes(db, recipient_ids, notification_title, notification_message)
 
     return {
         "message": "Etkinlik oluşturuldu",
