@@ -305,6 +305,7 @@ def get_my_leaves(
     leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id == user.id
     ).order_by(
+        LeaveRequest.created_at.desc(),
         LeaveRequest.start_time.desc()
     ).all()
 
@@ -353,6 +354,7 @@ def get_team_leaves(
     leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id.in_(user_ids or [-1])
     ).order_by(
+        LeaveRequest.created_at.desc(),
         LeaveRequest.start_time.desc()
     ).all()
 
