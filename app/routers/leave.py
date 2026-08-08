@@ -1,3 +1,4 @@
+from calendar import monthrange
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,6 +27,7 @@ ANNUAL_LEAVE_TYPE = "annual"
 WEEKLY_LEAVE_TYPE = "weekly"
 REPORT_LEAVE_TYPE = "report"
 EXCUSE_LEAVE_TYPE = "excuse"
+WEEKLY_LEAVE_MONTHLY_LIMIT = 2
 AUTO_APPROVED_LEAVE_TYPES = {
     ANNUAL_LEAVE_TYPE,
     WEEKLY_LEAVE_TYPE,
@@ -108,6 +110,60 @@ def annual_leave_balance(db: Session, user: User, year: int | None = None) -> di
         "pending_days": pending_days,
         "remaining_days": max(total_days - used_days, 0),
         "available_days": max(total_days - used_days - pending_days, 0),
+    }
+
+
+def weekly_leave_month_bounds(year: int, month: int):
+    last_day = monthrange(year, month)[1]
+
+    return datetime(year, month, 1), datetime(year, month, last_day, 23, 59, 59)
+
+
+def weekly_leave_days_in_month(leave: LeaveRequest, year: int, month: int) -> int:
+    month_start, month_end = weekly_leave_month_bounds(year, month)
+    start_time = max(leave.start_time, month_start)
+    end_time = min(leave.end_time, month_end)
+
+    if end_time < start_time:
+        return 0
+
+    return leave_day_count(start_time, end_time)
+
+
+def weekly_leave_used_days(db: Session, user_id: int, year: int, month: int) -> int:
+    month_start, month_end = weekly_leave_month_bounds(year, month)
+    weekly_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.user_id == user_id,
+        LeaveRequest.leave_type == WEEKLY_LEAVE_TYPE,
+        LeaveRequest.status != "rejected",
+        LeaveRequest.start_time <= month_end,
+        LeaveRequest.end_time >= month_start,
+    ).all()
+
+    return sum(
+        weekly_leave_days_in_month(leave, year, month)
+        for leave in weekly_leaves
+    )
+
+
+def weekly_leave_balance(
+    db: Session,
+    user: User,
+    year: int | None = None,
+    month: int | None = None,
+) -> dict:
+    today = turkey_today()
+    selected_year = year or today.year
+    selected_month = month or today.month
+    used_days = weekly_leave_used_days(db, user.id, selected_year, selected_month)
+
+    return {
+        "year": selected_year,
+        "month": selected_month,
+        "total_days": WEEKLY_LEAVE_MONTHLY_LIMIT,
+        "used_days": used_days,
+        "remaining_days": max(WEEKLY_LEAVE_MONTHLY_LIMIT - used_days, 0),
+        "available_days": max(WEEKLY_LEAVE_MONTHLY_LIMIT - used_days, 0),
     }
 
 
@@ -267,6 +323,29 @@ def create_leave_request(
                 detail=f"{balance['year']} yılı için yıllık izin hakkınız kalmadı",
             )
 
+    if leave_type == WEEKLY_LEAVE_TYPE:
+        if (
+            data.start_time.year != data.end_time.year
+            or data.start_time.month != data.end_time.month
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Haftalık izin talebi tek takvim ayı içinde olmalıdır",
+            )
+
+        balance = weekly_leave_balance(
+            db,
+            current_db_user,
+            data.start_time.year,
+            data.start_time.month,
+        )
+
+        if requested_days > balance["available_days"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Bu ay için haftalık izin hakkınız kalmadı",
+            )
+
     leave_request = LeaveRequest(
         user_id=current_db_user.id,
         start_time=data.start_time,
@@ -334,6 +413,7 @@ def get_my_leaves(
             for leave in leaves
         ],
         "annual_leave_balance": annual_leave_balance(db, user),
+        "weekly_leave_balance": weekly_leave_balance(db, user),
     }
 
 

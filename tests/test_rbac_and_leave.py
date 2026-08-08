@@ -253,6 +253,41 @@ class RbacAndLeaveTests(unittest.TestCase):
             0,
         )
 
+    def test_weekly_leave_is_limited_to_two_days_per_month(self):
+        employee = self.add_user(
+            "Employee",
+            "weekly-limit@example.com",
+            "employee",
+        )
+
+        first_day = datetime(2026, 8, 3, 0, 0)
+        second_day = datetime(2026, 8, 10, 0, 0)
+        third_day = datetime(2026, 8, 17, 0, 0)
+
+        for leave_day in [first_day, second_day]:
+            create_leave_request(
+                LeaveCreate(
+                    start_time=leave_day,
+                    end_time=leave_day.replace(hour=23, minute=59),
+                    leave_type="weekly",
+                ),
+                {"sub": employee.email, "role": employee.role},
+                self.db,
+            )
+
+        with self.assertRaises(HTTPException) as context:
+            create_leave_request(
+                LeaveCreate(
+                    start_time=third_day,
+                    end_time=third_day.replace(hour=23, minute=59),
+                    leave_type="weekly",
+                ),
+                {"sub": employee.email, "role": employee.role},
+                self.db,
+            )
+
+        self.assertEqual(context.exception.status_code, 400)
+
     def test_admin_cannot_approve_non_subordinate_leave(self):
         admin = self.add_user("Admin", "admin@example.com", "admin")
         employee = self.add_user("Employee", "employee@example.com", "employee")
