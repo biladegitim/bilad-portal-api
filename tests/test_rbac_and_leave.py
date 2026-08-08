@@ -222,6 +222,37 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "approved")
 
+    def test_weekly_and_report_leaves_are_auto_approved_without_notifications(self):
+        supervisor = self.add_user("Supervisor", "auto-supervisor@example.com", "admin")
+        employee = self.add_user(
+            "Employee",
+            "auto-employee@example.com",
+            "employee",
+            supervisor.id,
+        )
+
+        for leave_type in ["weekly", "report"]:
+            response = create_leave_request(
+                LeaveCreate(
+                    start_time=datetime.utcnow(),
+                    end_time=datetime.utcnow() + timedelta(hours=8),
+                    leave_type=leave_type,
+                ),
+                {"sub": employee.email, "role": employee.role},
+                self.db,
+            )
+            leave = self.db.query(LeaveRequest).filter(
+                LeaveRequest.id == response["leave_request_id"],
+            ).first()
+
+            self.assertEqual(leave.status, "approved")
+            self.assertEqual(leave.leave_type, leave_type)
+
+        self.assertEqual(
+            self.db.query(Notification).filter(Notification.link == "/leaves").count(),
+            0,
+        )
+
     def test_admin_cannot_approve_non_subordinate_leave(self):
         admin = self.add_user("Admin", "admin@example.com", "admin")
         employee = self.add_user("Employee", "employee@example.com", "employee")

@@ -23,10 +23,19 @@ from app.core.rbac import (
 router = APIRouter()
 LEAVE_APPROVE_PERMISSION = "leave.approve"
 ANNUAL_LEAVE_TYPE = "annual"
+WEEKLY_LEAVE_TYPE = "weekly"
+REPORT_LEAVE_TYPE = "report"
+EXCUSE_LEAVE_TYPE = "excuse"
+AUTO_APPROVED_LEAVE_TYPES = {
+    ANNUAL_LEAVE_TYPE,
+    WEEKLY_LEAVE_TYPE,
+    REPORT_LEAVE_TYPE,
+}
+VALID_LEAVE_TYPES = AUTO_APPROVED_LEAVE_TYPES | {EXCUSE_LEAVE_TYPE}
 
 
 def normalize_leave_type(leave_type: str | None) -> str:
-    return ANNUAL_LEAVE_TYPE if leave_type == ANNUAL_LEAVE_TYPE else "standard"
+    return leave_type if leave_type in VALID_LEAVE_TYPES else EXCUSE_LEAVE_TYPE
 
 
 def leave_day_count(start_time: datetime, end_time: datetime) -> int:
@@ -264,7 +273,7 @@ def create_leave_request(
         end_time=data.end_time,
         reason=data.reason,
         leave_type=leave_type,
-        status="pending",
+        status="approved" if leave_type in AUTO_APPROVED_LEAVE_TYPES else "pending",
     )
 
     db.add(leave_request)
@@ -273,14 +282,15 @@ def create_leave_request(
 
     notifications = []
 
-    for notify_user in leave_approvers(db, current_db_user):
-        notifications.append(add_notification(
-            db,
-            notify_user.id,
-            "Yeni İzin Talebi",
-            f"{current_db_user.full_name} yeni bir izin talebi oluşturdu.",
-            "/leaves",
-        ))
+    if leave_request.status == "pending":
+        for notify_user in leave_approvers(db, current_db_user):
+            notifications.append(add_notification(
+                db,
+                notify_user.id,
+                "Yeni İzin Talebi",
+                f"{current_db_user.full_name} yeni bir izin talebi oluşturdu.",
+                "/leaves",
+            ))
 
     db.commit()
 

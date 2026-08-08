@@ -46,7 +46,8 @@ def get_home_data(db: Session = Depends(get_db)):
             "full_name": user.full_name if user else "Bilinmiyor",
             "start_time": leave.start_time,
             "end_time": leave.end_time,
-            "reason": leave.reason
+            "reason": leave.reason,
+            "leave_type": "excuse" if leave.leave_type == "standard" else leave.leave_type,
         })
 
     return {
