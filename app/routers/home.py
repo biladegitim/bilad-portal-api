@@ -17,6 +17,7 @@ router = APIRouter()
 def get_home_data(db: Session = Depends(get_db)):
     today = turkey_today()
     today_start, today_end = local_day_bounds(today)
+    is_sunday = today.weekday() == 6
 
     upcoming_events = db.query(Event).filter(
         Event.start_time >= turkey_now()
@@ -28,13 +29,16 @@ def get_home_data(db: Session = Depends(get_db)):
         Menu.menu_date == today
     ).first()
 
-    approved_leaves = db.query(LeaveRequest).filter(
-        LeaveRequest.status == "approved",
-        LeaveRequest.start_time <= today_end,
-        LeaveRequest.end_time >= today_start
-    ).order_by(
-        LeaveRequest.start_time.asc()
-    ).all()
+    approved_leaves = []
+
+    if not is_sunday:
+        approved_leaves = db.query(LeaveRequest).filter(
+            LeaveRequest.status == "approved",
+            LeaveRequest.start_time <= today_end,
+            LeaveRequest.end_time >= today_start
+        ).order_by(
+            LeaveRequest.start_time.asc()
+        ).all()
 
     leave_list = []
 

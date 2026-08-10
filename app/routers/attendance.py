@@ -412,12 +412,12 @@ def export_attendance_excel(
             user_days = list(each_date(month_start, month_end))
 
             for record_date in user_days:
+                if record_date.weekday() == 6:
+                    continue
+
                 day_records = records_by_user_day.get((user.id, record_date), [])
                 approved_day_leaves = leaves_by_user_day.get((user.id, record_date), [])
                 has_approved_leave = bool(approved_day_leaves)
-
-                if not day_records and record_date.weekday() == 6 and not has_approved_leave:
-                    continue
 
                 if (
                     not day_records

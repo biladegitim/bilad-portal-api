@@ -28,6 +28,7 @@ from app.routers.leave import (
     create_leave_request,
     delete_leave_request,
     get_team_leaves,
+    leave_day_count,
 )
 from app.routers.permission import assign_permission_to_user, remove_permission_from_user
 from app.routers.menu import purge_old_menus
@@ -288,6 +289,14 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 400)
 
+    def test_leave_day_count_excludes_sundays(self):
+        saturday = datetime(2026, 8, 8, 0, 0)
+        monday = datetime(2026, 8, 10, 23, 59)
+        sunday = datetime(2026, 8, 9, 0, 0)
+
+        self.assertEqual(leave_day_count(saturday, monday), 2)
+        self.assertEqual(leave_day_count(sunday, sunday), 0)
+
     def test_admin_cannot_approve_non_subordinate_leave(self):
         admin = self.add_user("Admin", "admin@example.com", "admin")
         employee = self.add_user("Employee", "employee@example.com", "employee")
@@ -535,6 +544,41 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertIn("Scheduled", names)
         self.assertNotIn("Unscheduled", names)
+
+    def test_excel_export_excludes_sundays(self):
+        super_admin = self.add_user("Super", "super-sunday@example.com", "super_admin")
+        employee = self.add_user("Sunday Worker", "sunday-worker@example.com", "employee")
+        employee.work_start_time = time(9, 0)
+        employee.work_end_time = time(18, 0)
+
+        today = turkey_today()
+        last_sunday = today - timedelta(days=(today.weekday() - 6) % 7)
+        sunday_local_time = datetime.combine(last_sunday, time(9, 0))
+        self.db.add(AttendanceRecord(
+            user_id=employee.id,
+            record_type="check_in",
+            record_time=sunday_local_time - timedelta(hours=3),
+        ))
+        self.db.commit()
+
+        response = export_attendance_excel(
+            {"sub": super_admin.email, "role": super_admin.role},
+            self.db,
+        )
+
+        async def read_body():
+            return b"".join([chunk async for chunk in response.body_iterator])
+
+        body = asyncio.run(read_body())
+        workbook = load_workbook(BytesIO(body))
+        exported_dates = {
+            row[0]
+            for sheet in workbook.worksheets
+            for row in sheet.iter_rows(min_row=2, values_only=True)
+            if row[0]
+        }
+
+        self.assertNotIn(last_sunday.strftime("%d.%m.%Y"), exported_dates)
 
     def test_user_permission_updates_are_idempotent(self):
         super_admin = self.add_user("Super", "super@example.com", "super_admin")

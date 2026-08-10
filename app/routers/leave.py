@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -47,7 +47,17 @@ def leave_day_count(start_time: datetime, end_time: datetime) -> int:
             detail="İzin bitiş tarihi başlangıçtan önce olamaz",
         )
 
-    return max((end_time.date() - start_time.date()).days + 1, 1)
+    day_count = 0
+    current_date = start_time.date()
+    end_date = end_time.date()
+
+    while current_date <= end_date:
+        if current_date.weekday() != 6:
+            day_count += 1
+
+        current_date += timedelta(days=1)
+
+    return day_count
 
 
 def annual_leave_year_bounds(year: int):
@@ -608,6 +618,12 @@ def delete_leave_request(
 def get_today_approved_leaves(db: Session = Depends(get_db)):
     today = turkey_today()
     today_start, today_end = local_day_bounds(today)
+
+    if today.weekday() == 6:
+        return {
+            "date": str(today),
+            "approved_leaves": [],
+        }
 
     leaves = db.query(LeaveRequest).filter(
         LeaveRequest.status == "approved",
