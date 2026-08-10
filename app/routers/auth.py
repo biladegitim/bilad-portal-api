@@ -32,12 +32,15 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
 
     user = normalize_user_role(db, user)
 
-    token = create_access_token(
-        data={
-            "sub": user.email,
-            "role": user.role,
-        }
-    )
+    token_payload = {
+        "sub": user.email,
+        "role": user.role,
+    }
+
+    if user.role == "qr":
+        token = create_access_token(data=token_payload, expires_minutes=None)
+    else:
+        token = create_access_token(data=token_payload)
 
     return {
         "access_token": token,

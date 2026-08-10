@@ -1,4 +1,4 @@
-﻿from datetime import datetime, timedelta
+from datetime import datetime, timedelta
 from calendar import monthrange
 from io import BytesIO
 
@@ -93,7 +93,7 @@ def get_current_qr(
 
     return {
         "token": qr_token.token,
-        "expires_at": qr_token.expires_at,
+        "expires_at": utc_to_turkey(qr_token.expires_at),
     }
 
 

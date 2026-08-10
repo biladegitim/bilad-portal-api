@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -40,14 +42,21 @@ def get_home_data(db: Session = Depends(get_db)):
         user = db.query(User).filter(
             User.id == leave.user_id
         ).first()
+        leave_type = "excuse" if leave.leave_type == "standard" else leave.leave_type
+        display_start_time = leave.start_time
+        display_end_time = leave.end_time
+
+        if leave_type != "excuse" and user and user.work_start_time and user.work_end_time:
+            display_start_time = datetime.combine(today, user.work_start_time)
+            display_end_time = datetime.combine(today, user.work_end_time)
 
         leave_list.append({
             "leave_id": leave.id,
             "full_name": user.full_name if user else "Bilinmiyor",
-            "start_time": leave.start_time,
-            "end_time": leave.end_time,
+            "start_time": display_start_time,
+            "end_time": display_end_time,
             "reason": leave.reason,
-            "leave_type": "excuse" if leave.leave_type == "standard" else leave.leave_type,
+            "leave_type": leave_type,
         })
 
     return {
