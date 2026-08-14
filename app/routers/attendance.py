@@ -107,13 +107,13 @@ def scan_attendance(
     qr_token = db.query(QRToken).filter(QRToken.token == data.token).first()
 
     if not qr_token:
-        raise HTTPException(status_code=404, detail="QR kod bulunamadÄ±")
+        raise HTTPException(status_code=404, detail="QR kod bulunamadı")
 
     if qr_token.is_used:
-        raise HTTPException(status_code=400, detail="Bu QR kod daha Ã¶nce kullanÄ±lmÄ±ÅŸ")
+        raise HTTPException(status_code=400, detail="Bu QR kod daha önce kullanılmış")
 
     if qr_token.expires_at < utc_now():
-        raise HTTPException(status_code=400, detail="QR kodun sÃ¼resi dolmuÅŸ")
+        raise HTTPException(status_code=400, detail="QR kodun süresi dolmuş")
 
     user = get_db_user_from_token(db, current_user)
 
@@ -123,7 +123,7 @@ def scan_attendance(
         elif user.device_id != data.device_id:
             raise HTTPException(
                 status_code=403,
-                detail="Bu hesap farklÄ± bir cihaza tanÄ±mlÄ±",
+                detail="Bu hesap farklı bir cihaza tanımlı",
             )
 
     today = turkey_today()
@@ -152,7 +152,7 @@ def scan_attendance(
     db.refresh(attendance)
 
     return {
-        "message": "GiriÅŸ-Ã§Ä±kÄ±ÅŸ kaydÄ± oluÅŸturuldu",
+        "message": "Giriş-çıkış kaydı oluşturuldu",
         "record_type": record_type,
         "record_time": attendance.record_time,
     }
