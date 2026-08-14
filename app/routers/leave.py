@@ -110,19 +110,13 @@ def annual_leave_pending_days(db: Session, user_id: int, year: int) -> int:
 def annual_leave_balance(db: Session, user: User, year: int | None = None) -> dict:
     selected_year = year or turkey_today().year
     total_days = user.annual_leave_days or 0
-    manual_used_days = (
-        user.annual_leave_manual_used_days or 0
-        if user.annual_leave_manual_used_year == selected_year
-        else 0
-    )
-    used_days = annual_leave_used_days(db, user.id, selected_year) + manual_used_days
+    used_days = annual_leave_used_days(db, user.id, selected_year)
     pending_days = annual_leave_pending_days(db, user.id, selected_year)
 
     return {
         "year": selected_year,
         "total_days": total_days,
         "used_days": used_days,
-        "manual_used_days": manual_used_days,
         "pending_days": pending_days,
         "remaining_days": max(total_days - used_days, 0),
         "available_days": max(total_days - used_days - pending_days, 0),
