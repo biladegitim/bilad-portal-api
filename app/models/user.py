@@ -23,3 +23,4 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     device_id = Column(String, nullable=True)
+    device_name = Column(String, nullable=True)

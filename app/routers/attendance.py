@@ -117,14 +117,21 @@ def scan_attendance(
 
     user = get_db_user_from_token(db, current_user)
 
-    if normalize_role(user.role) != "super_admin":
+    if normalize_role(user.role) == "super_admin":
+        user.device_id = data.device_id
+        if data.device_name:
+            user.device_name = data.device_name
+    else:
         if not user.device_id:
             user.device_id = data.device_id
+            user.device_name = data.device_name
         elif user.device_id != data.device_id:
             raise HTTPException(
                 status_code=403,
                 detail="Bu hesap farklı bir cihaza tanımlı",
             )
+        elif data.device_name and user.device_name != data.device_name:
+            user.device_name = data.device_name
 
     today = turkey_today()
     today_start, _ = turkey_day_bounds_as_utc(today)
