@@ -90,6 +90,7 @@ def serialize_user(user: User):
         "work_start_time": str(user.work_start_time) if user.work_start_time else None,
         "work_end_time": str(user.work_end_time) if user.work_end_time else None,
         "annual_leave_days": user.annual_leave_days or 0,
+        "device_id": user.device_id,
     }
 
 
