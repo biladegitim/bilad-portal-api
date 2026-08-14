@@ -19,6 +19,8 @@ class User(Base):
     work_start_time = Column(Time, nullable=True)
     work_end_time = Column(Time, nullable=True)
     annual_leave_days = Column(Integer, default=0, nullable=False)
+    annual_leave_manual_used_days = Column(Integer, default=0, nullable=False)
+    annual_leave_manual_used_year = Column(Integer, nullable=True)
 
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)

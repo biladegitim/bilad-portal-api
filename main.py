@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 import asyncio
 import contextlib
@@ -58,6 +58,14 @@ with engine.begin() as connection:
     connection.execute(text(
         "ALTER TABLE users "
         "ADD COLUMN IF NOT EXISTS annual_leave_days INTEGER NOT NULL DEFAULT 0"
+    ))
+    connection.execute(text(
+        "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS annual_leave_manual_used_days INTEGER NOT NULL DEFAULT 0"
+    ))
+    connection.execute(text(
+        "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS annual_leave_manual_used_year INTEGER"
     ))
     connection.execute(text(
         "ALTER TABLE leave_requests "

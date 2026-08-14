@@ -30,4 +30,6 @@ class UserWorkHoursUpdate(BaseModel):
 
 class UserAnnualLeaveUpdate(BaseModel):
     annual_leave_days: int
+    annual_leave_manual_used_days: int = 0
+    annual_leave_manual_used_year: Optional[int] = None
     

@@ -90,6 +90,8 @@ def serialize_user(user: User):
         "work_start_time": str(user.work_start_time) if user.work_start_time else None,
         "work_end_time": str(user.work_end_time) if user.work_end_time else None,
         "annual_leave_days": user.annual_leave_days or 0,
+        "annual_leave_manual_used_days": user.annual_leave_manual_used_days or 0,
+        "annual_leave_manual_used_year": user.annual_leave_manual_used_year,
     }
 
 
@@ -305,7 +307,21 @@ def update_user_annual_leave(
             detail="Yıllık izin gün sayısı negatif olamaz",
         )
 
+    if data.annual_leave_manual_used_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Manuel kullanılan yıllık izin negatif olamaz",
+        )
+
+    if data.annual_leave_manual_used_days > data.annual_leave_days:
+        raise HTTPException(
+            status_code=400,
+            detail="Manuel kullanılan yıllık izin toplam yıllık haktan fazla olamaz",
+        )
+
     user.annual_leave_days = data.annual_leave_days
+    user.annual_leave_manual_used_days = data.annual_leave_manual_used_days
+    user.annual_leave_manual_used_year = data.annual_leave_manual_used_year
 
     db.commit()
     db.refresh(user)
