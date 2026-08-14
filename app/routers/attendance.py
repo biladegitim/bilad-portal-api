@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import get_db
 from app.models.qr import QRToken
 from app.models.attendance import AttendanceRecord
+from app.models.device_conflict import DeviceConflict
 from app.models.leave import LeaveRequest
 from app.models.user import User
 from app.schemas.attendance import AttendanceScan
@@ -126,6 +127,21 @@ def scan_attendance(
             user.device_id = data.device_id
             user.device_name = data.device_name
         elif user.device_id != data.device_id:
+            matched_user = db.query(User).filter(
+                User.device_id == data.device_id,
+                User.id != user.id,
+            ).first()
+
+            db.add(DeviceConflict(
+                attempted_user_id=user.id,
+                matched_user_id=matched_user.id if matched_user else None,
+                attempted_device_id=data.device_id,
+                attempted_device_name=data.device_name,
+                expected_device_id=user.device_id,
+                expected_device_name=user.device_name,
+            ))
+            db.commit()
+
             raise HTTPException(
                 status_code=403,
                 detail="Bu hesap farklı bir cihaza tanımlı",

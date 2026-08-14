@@ -23,6 +23,7 @@ from app.models.event import Event
 from app.models.room import Room, RoomReservation
 from app.models.permission import Permission, UserPermission
 from app.models.push_subscription import PushSubscription
+from app.models.device_conflict import DeviceConflict
 
 from app.routers.event import router as event_router, send_due_event_reminders
 from app.routers.attendance import router as attendance_router

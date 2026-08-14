@@ -11,6 +11,7 @@ from app.schemas.user import (
 )
 from app.models.user import User
 from app.models.attendance import AttendanceRecord
+from app.models.device_conflict import DeviceConflict
 from app.models.event import Event
 from app.models.leave import LeaveRequest
 from app.models.notification import Notification
@@ -20,6 +21,7 @@ from app.models.room import RoomReservation
 from app.database.connection import get_db
 from app.core.security import hash_password
 from app.core.dependencies import get_current_user, super_admin_required
+from app.core.timezone import utc_to_turkey
 from app.core.rbac import (
     VALID_ROLES,
     get_db_user_from_token,
@@ -52,6 +54,14 @@ def delete_user_completely(db: Session, user: User) -> None:
     )
     db.query(Notification).filter(Notification.user_id == user_id).delete(
         synchronize_session=False
+    )
+    db.query(DeviceConflict).filter(DeviceConflict.attempted_user_id == user_id).update(
+        {DeviceConflict.attempted_user_id: None},
+        synchronize_session=False,
+    )
+    db.query(DeviceConflict).filter(DeviceConflict.matched_user_id == user_id).update(
+        {DeviceConflict.matched_user_id: None},
+        synchronize_session=False,
     )
     db.query(AttendanceRecord).filter(AttendanceRecord.user_id == user_id).delete(
         synchronize_session=False
@@ -330,6 +340,47 @@ def get_users(
         "users": [
             serialize_user(user)
             for user in users
+        ]
+    }
+
+
+@router.get("/users/device-conflicts")
+def get_device_conflicts(
+    current_user: dict = Depends(super_admin_required),
+    db: Session = Depends(get_db),
+):
+    conflicts = db.query(DeviceConflict).order_by(
+        DeviceConflict.created_at.desc()
+    ).limit(50).all()
+
+    user_ids = {
+        user_id
+        for conflict in conflicts
+        for user_id in (conflict.attempted_user_id, conflict.matched_user_id)
+        if user_id
+    }
+    users_by_id = {
+        user.id: user
+        for user in db.query(User).filter(User.id.in_(user_ids)).all()
+    } if user_ids else {}
+
+    return {
+        "conflicts": [
+            {
+                "id": conflict.id,
+                "attempted_user_name": users_by_id.get(conflict.attempted_user_id).full_name
+                if conflict.attempted_user_id in users_by_id
+                else "Silinmiş kullanıcı",
+                "matched_user_name": users_by_id.get(conflict.matched_user_id).full_name
+                if conflict.matched_user_id in users_by_id
+                else None,
+                "attempted_device_name": conflict.attempted_device_name,
+                "expected_device_name": conflict.expected_device_name,
+                "attempted_device_id": conflict.attempted_device_id,
+                "expected_device_id": conflict.expected_device_id,
+                "created_at": utc_to_turkey(conflict.created_at),
+            }
+            for conflict in conflicts
         ]
     }
 
