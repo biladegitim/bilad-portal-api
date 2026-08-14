@@ -27,6 +27,7 @@ from app.core.timezone import (
 
 
 router = APIRouter()
+ATTENDANCE_TOLERANCE = timedelta(minutes=10)
 
 
 def each_date(start_date, end_date):
@@ -63,7 +64,7 @@ def serialize_daily_report(user: User, records: list[AttendanceRecord]):
 
         if user.work_start_time and first_entry:
             expected_start = datetime.combine(record_date, user.work_start_time)
-            late = first_entry > expected_start
+            late = first_entry > expected_start + ATTENDANCE_TOLERANCE
 
         if user.work_end_time and last_exit:
             expected_end = datetime.combine(record_date, user.work_end_time)
@@ -269,7 +270,7 @@ def get_attendance_dashboard(
         if first_entry and user.work_start_time:
             first_entry_local = utc_to_turkey(first_entry)
             expected_start = datetime.combine(today, user.work_start_time)
-            late = first_entry_local > expected_start
+            late = first_entry_local > expected_start + ATTENDANCE_TOLERANCE
 
         summary.append({
             "user_id": user.id,
@@ -319,7 +320,7 @@ def export_attendance_excel(
     now_utc = utc_now()
     turkey_offset = TURKEY_OFFSET
     now_local = utc_to_turkey(now_utc)
-    tolerance = timedelta(minutes=10)
+    tolerance = ATTENDANCE_TOLERANCE
 
     records = db.query(AttendanceRecord).filter(
         AttendanceRecord.user_id.in_(user_ids or [-1]),
