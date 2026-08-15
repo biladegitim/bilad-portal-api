@@ -368,6 +368,8 @@ def get_device_conflicts(
         "conflicts": [
             {
                 "id": conflict.id,
+                "attempted_user_id": conflict.attempted_user_id,
+                "matched_user_id": conflict.matched_user_id,
                 "attempted_user_name": users_by_id.get(conflict.attempted_user_id).full_name
                 if conflict.attempted_user_id in users_by_id
                 else "Silinmiş kullanıcı",
@@ -382,6 +384,29 @@ def get_device_conflicts(
             }
             for conflict in conflicts
         ]
+    }
+
+
+@router.delete("/users/{user_id}/device-binding")
+def reset_user_device_binding(
+    user_id: int,
+    current_user: dict = Depends(super_admin_required),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    user.device_id = None
+    user.device_name = None
+
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "message": "Cihaz eşleşmesi sıfırlandı",
+        "user": serialize_user(user),
     }
 
 
