@@ -540,10 +540,10 @@ def update_annual_leave_used_days(
     if not user:
         raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
 
-    if not can_manage_leave_user(db, current_db_user, user):
+    if normalize_role(current_db_user.role) != "super_admin":
         raise HTTPException(
             status_code=403,
-            detail="Bu kullanıcının yıllık izin bilgisini yönetemezsiniz",
+            detail="Kullanılan yıllık izin gününü sadece süper admin düzenleyebilir",
         )
 
     if data.year < 2000 or data.year > 2100:
