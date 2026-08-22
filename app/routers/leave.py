@@ -2,9 +2,11 @@ from calendar import monthrange
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
+from app.models.annual_leave_usage import AnnualLeaveUsageAdjustment
 from app.models.leave import LeaveRequest
 from app.models.user import User
 from app.models.notification import Notification
@@ -34,6 +36,11 @@ AUTO_APPROVED_LEAVE_TYPES = {
     REPORT_LEAVE_TYPE,
 }
 VALID_LEAVE_TYPES = AUTO_APPROVED_LEAVE_TYPES | {EXCUSE_LEAVE_TYPE}
+
+
+class AnnualLeaveUsedDaysUpdate(BaseModel):
+    year: int
+    used_days: int
 
 
 def normalize_leave_type(leave_type: str | None) -> str:
@@ -91,6 +98,15 @@ def annual_leave_used_days(db: Session, user_id: int, year: int) -> int:
     )
 
 
+def annual_leave_adjustment_days(db: Session, user_id: int, year: int) -> int:
+    adjustment = db.query(AnnualLeaveUsageAdjustment).filter(
+        AnnualLeaveUsageAdjustment.user_id == user_id,
+        AnnualLeaveUsageAdjustment.year == year,
+    ).first()
+
+    return adjustment.adjustment_days if adjustment else 0
+
+
 def annual_leave_pending_days(db: Session, user_id: int, year: int) -> int:
     year_start, year_end = annual_leave_year_bounds(year)
     pending_leaves = db.query(LeaveRequest).filter(
@@ -110,13 +126,17 @@ def annual_leave_pending_days(db: Session, user_id: int, year: int) -> int:
 def annual_leave_balance(db: Session, user: User, year: int | None = None) -> dict:
     selected_year = year or turkey_today().year
     total_days = user.annual_leave_days or 0
-    used_days = annual_leave_used_days(db, user.id, selected_year)
+    automatic_used_days = annual_leave_used_days(db, user.id, selected_year)
+    adjustment_days = annual_leave_adjustment_days(db, user.id, selected_year)
+    used_days = max(automatic_used_days + adjustment_days, 0)
     pending_days = annual_leave_pending_days(db, user.id, selected_year)
 
     return {
         "year": selected_year,
         "total_days": total_days,
         "used_days": used_days,
+        "automatic_used_days": automatic_used_days,
+        "manual_adjustment_days": adjustment_days,
         "pending_days": pending_days,
         "remaining_days": max(total_days - used_days, 0),
         "available_days": max(total_days - used_days - pending_days, 0),
@@ -504,6 +524,63 @@ def get_annual_leave_balances(
             }
             for user in users
         ]
+    }
+
+
+@router.patch("/annual-leave-balances/{user_id}/used-days")
+def update_annual_leave_used_days(
+    user_id: int,
+    data: AnnualLeaveUsedDaysUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_db_user = get_db_user_from_token(db, current_user)
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    if not can_manage_leave_user(db, current_db_user, user):
+        raise HTTPException(
+            status_code=403,
+            detail="Bu kullanıcının yıllık izin bilgisini yönetemezsiniz",
+        )
+
+    if data.year < 2000 or data.year > 2100:
+        raise HTTPException(status_code=400, detail="Geçersiz yıl")
+
+    if data.used_days < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Kullanılan gün negatif olamaz",
+        )
+
+    automatic_used_days = annual_leave_used_days(db, user.id, data.year)
+    adjustment_days = data.used_days - automatic_used_days
+    adjustment = db.query(AnnualLeaveUsageAdjustment).filter(
+        AnnualLeaveUsageAdjustment.user_id == user.id,
+        AnnualLeaveUsageAdjustment.year == data.year,
+    ).first()
+
+    if adjustment:
+        adjustment.adjustment_days = adjustment_days
+    else:
+        adjustment = AnnualLeaveUsageAdjustment(
+            user_id=user.id,
+            year=data.year,
+            adjustment_days=adjustment_days,
+        )
+        db.add(adjustment)
+
+    db.commit()
+
+    return {
+        "message": "Kullanılan yıllık izin gün sayısı güncellendi",
+        "balance": {
+            "user_id": user.id,
+            "full_name": user.full_name,
+            **annual_leave_balance(db, user, data.year),
+        },
     }
 
 
