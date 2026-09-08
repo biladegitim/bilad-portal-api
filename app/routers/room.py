@@ -30,6 +30,22 @@ def normalize_recurrence_frequency(frequency: str | None) -> str:
     return frequency if frequency in VALID_RECURRENCE_FREQUENCIES else "weekly"
 
 
+def archive_expired_room_reservations(db: Session) -> int:
+    today = turkey_today()
+    reservations = db.query(RoomReservation).filter(
+        RoomReservation.status == "approved",
+        RoomReservation.end_date < today,
+    ).all()
+
+    for reservation in reservations:
+        reservation.status = "archived"
+
+    if reservations:
+        db.commit()
+
+    return len(reservations)
+
+
 def first_weekday_on_or_after(start_date: date, weekday: int) -> date:
     return start_date + timedelta(days=(weekday - start_date.weekday()) % 7)
 
@@ -365,6 +381,7 @@ def create_room_reservation(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    archive_expired_room_reservations(db)
     user = get_db_user_from_token(db, current_user)
     ensure_room_exists(db, data.room_id)
     selected_weekdays = selected_weekdays_from_create(data)
@@ -432,6 +449,7 @@ def get_pending_room_reservations(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    archive_expired_room_reservations(db)
     user = get_db_user_from_token(db, current_user)
 
     if not can_approve_rooms(db, user):
@@ -452,6 +470,32 @@ def get_pending_room_reservations(
     }
 
 
+@router.get("/room-reservations/archive")
+def get_archived_room_reservations(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    archive_expired_room_reservations(db)
+    user = get_db_user_from_token(db, current_user)
+
+    if not can_approve_rooms(db, user):
+        raise HTTPException(status_code=403, detail="Mekan arşivini görüntüleme yetkiniz yok")
+
+    reservations = db.query(RoomReservation).filter(
+        RoomReservation.status == "archived"
+    ).order_by(
+        RoomReservation.end_date.desc(),
+        RoomReservation.start_time.asc(),
+    ).all()
+
+    return {
+        "reservations": [
+            serialize_reservation(db, reservation)
+            for reservation in reservations
+        ]
+    }
+
+
 @router.patch("/room-reservations/{reservation_id}")
 def update_room_reservation(
     reservation_id: int,
@@ -459,6 +503,7 @@ def update_room_reservation(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    archive_expired_room_reservations(db)
     current_db_user = get_db_user_from_token(db, current_user)
     reservation = db.query(RoomReservation).filter(
         RoomReservation.id == reservation_id
@@ -540,6 +585,7 @@ def approve_room_reservation(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    archive_expired_room_reservations(db)
     current_db_user = get_db_user_from_token(db, current_user)
 
     if not can_approve_rooms(db, current_db_user):
@@ -679,6 +725,7 @@ def delete_room_reservation(
 
 @router.get("/room-reservations/weekly")
 def get_weekly_room_reservations(db: Session = Depends(get_db)):
+    archive_expired_room_reservations(db)
     week_start = turkey_today() - timedelta(days=turkey_today().weekday())
     reservations = db.query(RoomReservation).filter(
         RoomReservation.status == "approved"
@@ -722,6 +769,7 @@ def get_room_reservations_by_date(
     selected_date: date,
     db: Session = Depends(get_db),
 ):
+    archive_expired_room_reservations(db)
     weekday = selected_date.weekday()
 
     reservations = db.query(RoomReservation).filter(
