@@ -472,7 +472,13 @@ def export_attendance_excel(
                 status = ""
 
                 if has_approved_leave:
-                    status = "İzinli"
+                    leave_period = approved_day_leaves[0].leave_period
+                    if leave_period == "morning":
+                        status = "İzinli Ö.Ö"
+                    elif leave_period == "afternoon":
+                        status = "İzinli Ö.S"
+                    else:
+                        status = "İzinli"
                 elif not day_records:
                     status = "Gelmedi"
 
@@ -503,7 +509,7 @@ def export_attendance_excel(
                 if status == "Gelmedi":
                     status_cell.fill = warning_fill
                     status_cell.font = warning_font
-                elif status == "İzinli":
+                elif status.startswith("İzinli"):
                     status_cell.fill = leave_fill
                     status_cell.font = leave_font
 

@@ -47,10 +47,17 @@ def get_home_data(db: Session = Depends(get_db)):
             User.id == leave.user_id
         ).first()
         leave_type = "excuse" if leave.leave_type == "standard" else leave.leave_type
+        leave_period = leave.leave_period if leave_type == "weekly" else None
         display_start_time = leave.start_time
         display_end_time = leave.end_time
 
-        if leave_type != "excuse" and user and user.work_start_time and user.work_end_time:
+        if (
+            leave_type != "excuse"
+            and leave_period not in ["morning", "afternoon"]
+            and user
+            and user.work_start_time
+            and user.work_end_time
+        ):
             display_start_time = datetime.combine(today, user.work_start_time)
             display_end_time = datetime.combine(today, user.work_end_time)
 
@@ -61,6 +68,7 @@ def get_home_data(db: Session = Depends(get_db)):
             "end_time": display_end_time,
             "reason": leave.reason,
             "leave_type": leave_type,
+            "leave_period": leave_period,
         })
 
     return {

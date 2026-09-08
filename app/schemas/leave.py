@@ -9,3 +9,4 @@ class LeaveCreate(BaseModel):
     end_time: datetime
     reason: Optional[str] = None
     leave_type: Optional[str] = "standard"
+    leave_period: Optional[str] = None

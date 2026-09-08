@@ -74,6 +74,10 @@ with engine.begin() as connection:
         "ADD COLUMN IF NOT EXISTS leave_type VARCHAR NOT NULL DEFAULT 'standard'"
     ))
     connection.execute(text(
+        "ALTER TABLE leave_requests "
+        "ADD COLUMN IF NOT EXISTS leave_period VARCHAR"
+    ))
+    connection.execute(text(
         "ALTER TABLE events "
         "ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP"
     ))

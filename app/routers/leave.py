@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -30,6 +30,11 @@ WEEKLY_LEAVE_TYPE = "weekly"
 REPORT_LEAVE_TYPE = "report"
 EXCUSE_LEAVE_TYPE = "excuse"
 WEEKLY_LEAVE_MONTHLY_LIMIT = 2
+FULL_DAY_PERIOD = "full_day"
+MORNING_PERIOD = "morning"
+AFTERNOON_PERIOD = "afternoon"
+VALID_LEAVE_PERIODS = {FULL_DAY_PERIOD, MORNING_PERIOD, AFTERNOON_PERIOD}
+HALF_DAY_PERIODS = {MORNING_PERIOD, AFTERNOON_PERIOD}
 AUTO_APPROVED_LEAVE_TYPES = {
     ANNUAL_LEAVE_TYPE,
     WEEKLY_LEAVE_TYPE,
@@ -47,12 +52,36 @@ def normalize_leave_type(leave_type: str | None) -> str:
     return leave_type if leave_type in VALID_LEAVE_TYPES else EXCUSE_LEAVE_TYPE
 
 
-def leave_day_count(start_time: datetime, end_time: datetime) -> int:
+def normalize_leave_period(leave_type: str, leave_period: str | None) -> str | None:
+    if leave_type != WEEKLY_LEAVE_TYPE:
+        return None
+
+    return leave_period if leave_period in VALID_LEAVE_PERIODS else FULL_DAY_PERIOD
+
+
+def weekly_period_times(leave_period: str | None) -> tuple[time, time] | None:
+    if leave_period == MORNING_PERIOD:
+        return time(9, 0), time(13, 30)
+
+    if leave_period == AFTERNOON_PERIOD:
+        return time(13, 30), time(18, 0)
+
+    return None
+
+
+def leave_day_count(
+    start_time: datetime,
+    end_time: datetime,
+    leave_period: str | None = None,
+) -> float:
     if end_time < start_time:
         raise HTTPException(
             status_code=400,
             detail="İzin bitiş tarihi başlangıçtan önce olamaz",
         )
+
+    if leave_period in HALF_DAY_PERIODS:
+        return 0 if start_time.date().weekday() == 6 else 0.5
 
     day_count = 0
     current_date = start_time.date()
@@ -79,7 +108,7 @@ def annual_leave_days_in_year(leave: LeaveRequest, year: int) -> int:
     if end_time < start_time:
         return 0
 
-    return leave_day_count(start_time, end_time)
+    return int(leave_day_count(start_time, end_time))
 
 
 def annual_leave_used_days(db: Session, user_id: int, year: int) -> int:
@@ -149,7 +178,7 @@ def weekly_leave_month_bounds(year: int, month: int):
     return datetime(year, month, 1), datetime(year, month, last_day, 23, 59, 59)
 
 
-def weekly_leave_days_in_month(leave: LeaveRequest, year: int, month: int) -> int:
+def weekly_leave_days_in_month(leave: LeaveRequest, year: int, month: int) -> float:
     month_start, month_end = weekly_leave_month_bounds(year, month)
     start_time = max(leave.start_time, month_start)
     end_time = min(leave.end_time, month_end)
@@ -157,10 +186,10 @@ def weekly_leave_days_in_month(leave: LeaveRequest, year: int, month: int) -> in
     if end_time < start_time:
         return 0
 
-    return leave_day_count(start_time, end_time)
+    return leave_day_count(start_time, end_time, leave.leave_period)
 
 
-def weekly_leave_used_days(db: Session, user_id: int, year: int, month: int) -> int:
+def weekly_leave_used_days(db: Session, user_id: int, year: int, month: int) -> float:
     month_start, month_end = weekly_leave_month_bounds(year, month)
     weekly_leaves = db.query(LeaveRequest).filter(
         LeaveRequest.user_id == user_id,
@@ -208,7 +237,15 @@ def serialize_leave(db: Session, leave: LeaveRequest):
         "end_time": leave.end_time,
         "reason": leave.reason,
         "leave_type": normalize_leave_type(leave.leave_type),
-        "day_count": leave_day_count(leave.start_time, leave.end_time),
+        "leave_period": normalize_leave_period(
+            normalize_leave_type(leave.leave_type),
+            leave.leave_period,
+        ),
+        "day_count": leave_day_count(
+            leave.start_time,
+            leave.end_time,
+            leave.leave_period,
+        ),
         "status": leave.status,
         "approved_by": leave.approved_by,
     }
@@ -336,16 +373,42 @@ def create_leave_request(
 ):
     current_db_user = get_db_user_from_token(db, current_user)
     leave_type = normalize_leave_type(data.leave_type)
-    requested_days = leave_day_count(data.start_time, data.end_time)
+    leave_period = normalize_leave_period(leave_type, data.leave_period)
+    request_start_time = data.start_time
+    request_end_time = data.end_time
+
+    period_times = weekly_period_times(leave_period)
+    if period_times:
+        if data.start_time.date() != data.end_time.date():
+            raise HTTPException(
+                status_code=400,
+                detail="Yarım gün haftalık izin tek gün için oluşturulmalıdır",
+            )
+
+        start_clock, end_clock = period_times
+        request_start_time = datetime.combine(data.start_time.date(), start_clock)
+        request_end_time = datetime.combine(data.start_time.date(), end_clock)
+
+    requested_days = leave_day_count(
+        request_start_time,
+        request_end_time,
+        leave_period,
+    )
+
+    if requested_days <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Pazar günü için izin talebi oluşturulamaz",
+        )
 
     if leave_type == ANNUAL_LEAVE_TYPE:
-        if data.start_time.year != data.end_time.year:
+        if request_start_time.year != request_end_time.year:
             raise HTTPException(
                 status_code=400,
                 detail="Yıllık izin talebi tek takvim yılı içinde olmalıdır",
             )
 
-        balance = annual_leave_balance(db, current_db_user, data.start_time.year)
+        balance = annual_leave_balance(db, current_db_user, request_start_time.year)
 
         if requested_days > balance["available_days"]:
             raise HTTPException(
@@ -355,8 +418,8 @@ def create_leave_request(
 
     if leave_type == WEEKLY_LEAVE_TYPE:
         if (
-            data.start_time.year != data.end_time.year
-            or data.start_time.month != data.end_time.month
+            request_start_time.year != request_end_time.year
+            or request_start_time.month != request_end_time.month
         ):
             raise HTTPException(
                 status_code=400,
@@ -366,8 +429,8 @@ def create_leave_request(
         balance = weekly_leave_balance(
             db,
             current_db_user,
-            data.start_time.year,
-            data.start_time.month,
+            request_start_time.year,
+            request_start_time.month,
         )
 
         if requested_days > balance["available_days"]:
@@ -378,10 +441,11 @@ def create_leave_request(
 
     leave_request = LeaveRequest(
         user_id=current_db_user.id,
-        start_time=data.start_time,
-        end_time=data.end_time,
+        start_time=request_start_time,
+        end_time=request_end_time,
         reason=data.reason,
         leave_type=leave_type,
+        leave_period=leave_period,
         status="approved" if leave_type in AUTO_APPROVED_LEAVE_TYPES else "pending",
     )
 
@@ -436,7 +500,15 @@ def get_my_leaves(
                 "end_time": leave.end_time,
                 "reason": leave.reason,
                 "leave_type": normalize_leave_type(leave.leave_type),
-                "day_count": leave_day_count(leave.start_time, leave.end_time),
+                "leave_period": normalize_leave_period(
+                    normalize_leave_type(leave.leave_type),
+                    leave.leave_period,
+                ),
+                "day_count": leave_day_count(
+                    leave.start_time,
+                    leave.end_time,
+                    leave.leave_period,
+                ),
                 "status": leave.status,
                 "approved_by": leave.approved_by,
             }
@@ -714,6 +786,7 @@ def get_today_approved_leaves(db: Session = Depends(get_db)):
 
     for leave in leaves:
         user = db.query(User).filter(User.id == leave.user_id).first()
+        leave_type = normalize_leave_type(leave.leave_type)
         result.append({
             "leave_id": leave.id,
             "user_id": leave.user_id,
@@ -721,8 +794,13 @@ def get_today_approved_leaves(db: Session = Depends(get_db)):
             "start_time": leave.start_time,
             "end_time": leave.end_time,
             "reason": leave.reason,
-            "leave_type": normalize_leave_type(leave.leave_type),
-            "day_count": leave_day_count(leave.start_time, leave.end_time),
+            "leave_type": leave_type,
+            "leave_period": normalize_leave_period(leave_type, leave.leave_period),
+            "day_count": leave_day_count(
+                leave.start_time,
+                leave.end_time,
+                leave.leave_period,
+            ),
         })
 
     return {
