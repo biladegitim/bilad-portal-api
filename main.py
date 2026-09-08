@@ -54,6 +54,10 @@ with engine.begin() as connection:
         "ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP"
     ))
     connection.execute(text(
+        "ALTER TABLE room_reservations "
+        "ADD COLUMN IF NOT EXISTS recurrence_frequency VARCHAR NOT NULL DEFAULT 'weekly'"
+    ))
+    connection.execute(text(
         "ALTER TABLE rooms "
         "ADD COLUMN IF NOT EXISTS floor VARCHAR"
     ))

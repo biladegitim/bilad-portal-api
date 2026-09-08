@@ -32,6 +32,7 @@ class RoomReservation(Base):
 
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
+    recurrence_frequency = Column(String, default="weekly", nullable=False)
 
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String, default="pending", nullable=False)

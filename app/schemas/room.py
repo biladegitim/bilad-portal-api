@@ -26,6 +26,7 @@ class RoomReservationCreate(BaseModel):
     weekdays: Optional[list[int]] = None
     start_time: time
     end_time: time
+    recurrence_frequency: Optional[str] = "weekly"
 
 
 class RoomReservationUpdate(BaseModel):
@@ -37,3 +38,4 @@ class RoomReservationUpdate(BaseModel):
     weekday: Optional[int] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
+    recurrence_frequency: Optional[str] = None

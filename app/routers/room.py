@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user, super_admin_required
 from app.core.permission import has_permission
 from app.core.rbac import get_db_user_from_token, normalize_role
+from app.core.timezone import turkey_today
 from app.database.connection import get_db
 from app.models.notification import Notification
 from app.models.permission import Permission, UserPermission
@@ -22,6 +23,85 @@ from app.schemas.room import (
 
 router = APIRouter()
 ROOM_APPROVE_PERMISSION = "room.approve"
+VALID_RECURRENCE_FREQUENCIES = {"weekly", "biweekly", "monthly"}
+
+
+def normalize_recurrence_frequency(frequency: str | None) -> str:
+    return frequency if frequency in VALID_RECURRENCE_FREQUENCIES else "weekly"
+
+
+def first_weekday_on_or_after(start_date: date, weekday: int) -> date:
+    return start_date + timedelta(days=(weekday - start_date.weekday()) % 7)
+
+
+def week_of_month(selected_date: date) -> int:
+    return ((selected_date.day - 1) // 7) + 1
+
+
+def recurrence_matches_date(
+    start_date: date,
+    weekday: int,
+    frequency: str | None,
+    selected_date: date,
+) -> bool:
+    first_occurrence = first_weekday_on_or_after(start_date, weekday)
+
+    if selected_date < first_occurrence:
+        return False
+
+    normalized_frequency = normalize_recurrence_frequency(frequency)
+
+    if normalized_frequency == "weekly":
+        return True
+
+    if normalized_frequency == "biweekly":
+        return ((selected_date - first_occurrence).days // 7) % 2 == 0
+
+    return week_of_month(selected_date) == week_of_month(first_occurrence)
+
+
+def reservation_occurs_on_date(
+    reservation: RoomReservation,
+    selected_date: date,
+) -> bool:
+    return (
+        reservation.start_date <= selected_date <= reservation.end_date
+        and reservation.weekday == selected_date.weekday()
+        and recurrence_matches_date(
+            reservation.start_date,
+            reservation.weekday,
+            reservation.recurrence_frequency,
+            selected_date,
+        )
+    )
+
+
+def recurrences_overlap(
+    existing_reservation: RoomReservation,
+    weekday: int,
+    start_date: date,
+    end_date: date,
+    recurrence_frequency: str,
+) -> bool:
+    current_date = max(existing_reservation.start_date, start_date)
+    overlap_end = min(existing_reservation.end_date, end_date)
+    current_date = first_weekday_on_or_after(current_date, weekday)
+
+    while current_date <= overlap_end:
+        if (
+            reservation_occurs_on_date(existing_reservation, current_date)
+            and recurrence_matches_date(
+                start_date,
+                weekday,
+                recurrence_frequency,
+                current_date,
+            )
+        ):
+            return True
+
+        current_date += timedelta(days=7)
+
+    return False
 
 
 def can_approve_rooms(db: Session, user: User) -> bool:
@@ -92,6 +172,9 @@ def serialize_reservation(db: Session, reservation: RoomReservation):
         "start_date": str(reservation.start_date),
         "end_date": str(reservation.end_date),
         "weekday": reservation.weekday,
+        "recurrence_frequency": normalize_recurrence_frequency(
+            reservation.recurrence_frequency
+        ),
         "created_by": reservation.created_by,
         "created_by_name": creator.full_name if creator else "Bilinmiyor",
         "status": reservation.status,
@@ -108,6 +191,7 @@ def find_reservation_conflict(
     end_date,
     start_time,
     end_time,
+    recurrence_frequency: str = "weekly",
     exclude_id: int | None = None,
 ):
     query = db.query(RoomReservation).filter(
@@ -123,7 +207,17 @@ def find_reservation_conflict(
     if exclude_id is not None:
         query = query.filter(RoomReservation.id != exclude_id)
 
-    return query.first()
+    for reservation in query.all():
+        if recurrences_overlap(
+            reservation,
+            weekday,
+            start_date,
+            end_date,
+            normalize_recurrence_frequency(recurrence_frequency),
+        ):
+            return reservation
+
+    return None
 
 
 def ensure_room_exists(db: Session, room_id: int):
@@ -274,6 +368,7 @@ def create_room_reservation(
     user = get_db_user_from_token(db, current_user)
     ensure_room_exists(db, data.room_id)
     selected_weekdays = selected_weekdays_from_create(data)
+    recurrence_frequency = normalize_recurrence_frequency(data.recurrence_frequency)
 
     for weekday in selected_weekdays:
         conflict = find_reservation_conflict(
@@ -284,6 +379,7 @@ def create_room_reservation(
             data.end_date,
             data.start_time,
             data.end_time,
+            recurrence_frequency,
         )
 
         if conflict:
@@ -301,6 +397,7 @@ def create_room_reservation(
             weekday=weekday,
             start_time=data.start_time,
             end_time=data.end_time,
+            recurrence_frequency=recurrence_frequency,
             created_by=user.id,
             status="pending",
         )
@@ -384,6 +481,11 @@ def update_room_reservation(
     new_end_date = data.end_date if data.end_date is not None else reservation.end_date
     new_start_time = data.start_time if data.start_time is not None else reservation.start_time
     new_end_time = data.end_time if data.end_time is not None else reservation.end_time
+    new_recurrence_frequency = normalize_recurrence_frequency(
+        data.recurrence_frequency
+        if data.recurrence_frequency is not None
+        else reservation.recurrence_frequency
+    )
 
     ensure_room_exists(db, new_room_id)
 
@@ -396,6 +498,7 @@ def update_room_reservation(
             new_end_date,
             new_start_time,
             new_end_time,
+            new_recurrence_frequency,
             exclude_id=reservation_id,
         )
 
@@ -408,6 +511,7 @@ def update_room_reservation(
     reservation.end_date = new_end_date
     reservation.start_time = new_start_time
     reservation.end_time = new_end_time
+    reservation.recurrence_frequency = new_recurrence_frequency
 
     if data.title is not None:
         reservation.title = data.title
@@ -456,6 +560,7 @@ def approve_room_reservation(
         reservation.end_date,
         reservation.start_time,
         reservation.end_time,
+        reservation.recurrence_frequency,
         exclude_id=reservation.id,
     )
 
@@ -554,6 +659,7 @@ def delete_room_reservation(
         RoomReservation.end_date == reservation.end_date,
         RoomReservation.start_time == reservation.start_time,
         RoomReservation.end_time == reservation.end_time,
+        RoomReservation.recurrence_frequency == reservation.recurrence_frequency,
         RoomReservation.created_by == reservation.created_by,
         RoomReservation.status == reservation.status,
     ).all()
@@ -573,6 +679,7 @@ def delete_room_reservation(
 
 @router.get("/room-reservations/weekly")
 def get_weekly_room_reservations(db: Session = Depends(get_db)):
+    week_start = turkey_today() - timedelta(days=turkey_today().weekday())
     reservations = db.query(RoomReservation).filter(
         RoomReservation.status == "approved"
     ).order_by(
@@ -596,10 +703,16 @@ def get_weekly_room_reservations(db: Session = Depends(get_db)):
     }
 
     for reservation in reservations:
+        if reservation.weekday is None:
+            continue
+
         day_name = weekday_names.get(reservation.weekday, "Bilinmiyor")
-        weekly_schedule.setdefault(day_name, []).append(
-            serialize_reservation(db, reservation)
-        )
+        selected_date = week_start + timedelta(days=reservation.weekday)
+
+        if reservation_occurs_on_date(reservation, selected_date):
+            weekly_schedule.setdefault(day_name, []).append(
+                serialize_reservation(db, reservation)
+            )
 
     return {"weekly_schedule": weekly_schedule}
 
@@ -617,6 +730,11 @@ def get_room_reservations_by_date(
         RoomReservation.start_date <= selected_date,
         RoomReservation.end_date >= selected_date,
     ).order_by(RoomReservation.start_time.asc()).all()
+    reservations = [
+        reservation
+        for reservation in reservations
+        if reservation_occurs_on_date(reservation, selected_date)
+    ]
 
     if not reservations:
         return {
