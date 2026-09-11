@@ -39,6 +39,90 @@ def each_date(start_date, end_date):
         current_date += timedelta(days=1)
 
 
+def leave_type_for(leave: LeaveRequest) -> str:
+    return "excuse" if leave.leave_type == "standard" else leave.leave_type
+
+
+def leave_interval_for_day(leave: LeaveRequest, record_date, user: User):
+    leave_type = leave_type_for(leave)
+    day_start = datetime.combine(record_date, datetime.min.time())
+    day_end = datetime.combine(record_date, datetime.max.time())
+
+    if (
+        leave_type in ["annual", "report", "weekly"]
+        and leave.leave_period not in ["morning", "afternoon"]
+        and user.work_start_time
+        and user.work_end_time
+    ):
+        return (
+            datetime.combine(record_date, user.work_start_time),
+            datetime.combine(record_date, user.work_end_time),
+        )
+
+    start_time = max(leave.start_time, day_start)
+    end_time = min(leave.end_time, day_end)
+
+    if end_time < start_time:
+        return None
+
+    return start_time, end_time
+
+
+def merge_leave_intervals(intervals):
+    if not intervals:
+        return []
+
+    merged = []
+
+    for start_time, end_time in sorted(intervals, key=lambda item: item[0]):
+        if not merged or start_time > merged[-1][1]:
+            merged.append([start_time, end_time])
+        else:
+            merged[-1][1] = max(merged[-1][1], end_time)
+
+    return [(start_time, end_time) for start_time, end_time in merged]
+
+
+def attendance_window_for_day(user: User, record_date, leaves: list[LeaveRequest]):
+    if not user.work_start_time or not user.work_end_time:
+        return None, None, False
+
+    expected_start = datetime.combine(record_date, user.work_start_time)
+    expected_end = datetime.combine(record_date, user.work_end_time)
+    intervals = []
+
+    for leave in leaves:
+        interval = leave_interval_for_day(leave, record_date, user)
+
+        if not interval:
+            continue
+
+        start_time, end_time = interval
+
+        if end_time <= expected_start or start_time >= expected_end:
+            continue
+
+        intervals.append((
+            max(start_time, expected_start),
+            min(end_time, expected_end),
+        ))
+
+    for start_time, end_time in merge_leave_intervals(intervals):
+        if start_time <= expected_start and end_time >= expected_end:
+            return expected_start, expected_end, True
+
+        if start_time <= expected_start < end_time:
+            expected_start = end_time
+
+        if start_time < expected_end <= end_time:
+            expected_end = start_time
+
+    if expected_start >= expected_end:
+        return expected_start, expected_end, True
+
+    return expected_start, expected_end, False
+
+
 def serialize_daily_report(user: User, records: list[AttendanceRecord]):
     daily_records = {}
 
@@ -266,6 +350,18 @@ def get_attendance_dashboard(
     ).order_by(
         AttendanceRecord.record_time.asc()
     ).all()
+    today_start_local = utc_to_turkey(today_start)
+    today_end_local = utc_to_turkey(today_end)
+    today_leaves = db.query(LeaveRequest).filter(
+        LeaveRequest.user_id.in_(user_ids or [-1]),
+        LeaveRequest.status == "approved",
+        LeaveRequest.start_time <= today_end_local,
+        LeaveRequest.end_time >= today_start_local,
+    ).all()
+    leaves_by_user = {}
+
+    for leave in today_leaves:
+        leaves_by_user.setdefault(leave.user_id, []).append(leave)
 
     summary = []
 
@@ -292,8 +388,16 @@ def get_attendance_dashboard(
 
         if first_entry and user.work_start_time:
             first_entry_local = utc_to_turkey(first_entry)
-            expected_start = datetime.combine(today, user.work_start_time)
-            late = first_entry_local > expected_start + ATTENDANCE_TOLERANCE
+            expected_start, _, full_day_leave = attendance_window_for_day(
+                user,
+                today,
+                leaves_by_user.get(user.id, []),
+            )
+            late = (
+                not full_day_leave
+                and expected_start is not None
+                and first_entry_local > expected_start + ATTENDANCE_TOLERANCE
+            )
 
         summary.append({
             "user_id": user.id,
@@ -441,19 +545,21 @@ def export_attendance_excel(
 
                 day_records = records_by_user_day.get((user.id, record_date), [])
                 approved_day_leaves = leaves_by_user_day.get((user.id, record_date), [])
-                has_approved_leave = bool(approved_day_leaves)
+                expected_start, expected_end, full_day_leave = attendance_window_for_day(
+                    user,
+                    record_date,
+                    approved_day_leaves,
+                )
 
                 if (
                     not day_records
-                    and not has_approved_leave
+                    and not full_day_leave
                     and record_date == today
                 ):
-                    if not user.work_end_time:
+                    if not expected_end:
                         continue
 
-                    expected_end_today = datetime.combine(record_date, user.work_end_time)
-
-                    if now_local <= expected_end_today + tolerance:
+                    if now_local <= expected_end + tolerance:
                         continue
 
                 check_ins = [
@@ -471,14 +577,8 @@ def export_attendance_excel(
                 last_exit = check_outs[-1] if check_outs else None
                 status = ""
 
-                if has_approved_leave:
-                    leave_period = approved_day_leaves[0].leave_period
-                    if leave_period == "morning":
-                        status = "İzinli Ö.Ö"
-                    elif leave_period == "afternoon":
-                        status = "İzinli Ö.S"
-                    else:
-                        status = "İzinli"
+                if full_day_leave:
+                    status = "İzinli"
                 elif not day_records:
                     status = "Gelmedi"
 
@@ -494,14 +594,12 @@ def export_attendance_excel(
                 exit_cell = ws.cell(row=row_index, column=4)
                 status_cell = ws.cell(row=row_index, column=5)
 
-                if user.work_start_time and first_entry:
-                    expected_start = datetime.combine(record_date, user.work_start_time)
+                if not full_day_leave and expected_start and first_entry:
                     if first_entry > expected_start + tolerance:
                         entry_cell.fill = warning_fill
                         entry_cell.font = warning_font
 
-                if user.work_end_time and last_exit:
-                    expected_end = datetime.combine(record_date, user.work_end_time)
+                if not full_day_leave and expected_end and last_exit:
                     if last_exit < expected_end - tolerance:
                         exit_cell.fill = warning_fill
                         exit_cell.font = warning_font
