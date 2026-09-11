@@ -4,11 +4,14 @@ from sqlalchemy.orm import Session
 from app.models.user import User
 
 
-VALID_ROLES = {"super_admin", "admin", "employee", "qr"}
+VALID_ROLES = {"super_admin", "admin", "employee", "qr", "volunteer"}
 ROLE_ALIASES = {
     "çalışan": "employee",
     "calisan": "employee",
     "employee": "employee",
+    "gönüllü": "volunteer",
+    "gonullu": "volunteer",
+    "volunteer": "volunteer",
     "qr": "qr",
     "qr_display": "qr",
     "admin": "admin",

@@ -48,6 +48,7 @@ def get_profile(
         "id": user.id,
         "full_name": user.full_name,
         "email": user.email,
+        "role": normalize_role(user.role),
         "position": user.position,
         "profile_photo": user.profile_photo,
     }
