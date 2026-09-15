@@ -23,7 +23,7 @@ from app.schemas.room import (
 
 router = APIRouter()
 ROOM_APPROVE_PERMISSION = "room.approve"
-VALID_RECURRENCE_FREQUENCIES = {"weekly", "biweekly", "monthly"}
+VALID_RECURRENCE_FREQUENCIES = {"none", "weekly", "biweekly", "monthly"}
 
 
 def normalize_recurrence_frequency(frequency: str | None) -> str:
@@ -72,6 +72,9 @@ def recurrence_matches_date(
 
     if normalized_frequency == "biweekly":
         return ((selected_date - first_occurrence).days // 7) % 2 == 0
+
+    if normalized_frequency == "none":
+        return selected_date == first_occurrence
 
     return week_of_month(selected_date) == week_of_month(first_occurrence)
 
@@ -248,6 +251,31 @@ def ensure_room_exists(db: Session, room_id: int):
     return room
 
 
+def validate_reservation_window(start_date, end_date, start_time, end_time):
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitiş tarihi başlangıç tarihinden önce olamaz",
+        )
+
+    if end_time <= start_time:
+        raise HTTPException(
+            status_code=400,
+            detail="Bitiş saati başlangıç saatinden sonra olmalıdır",
+        )
+
+
+def validate_weekday_in_date_range(start_date, end_date, weekday: int):
+    if weekday is None:
+        raise HTTPException(status_code=400, detail="Program günü seçilmelidir")
+
+    if first_weekday_on_or_after(start_date, weekday) > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="Seçilen gün tarih aralığında bulunmuyor",
+        )
+
+
 def selected_weekdays_from_create(data: RoomReservationCreate):
     selected_weekdays = data.weekdays if data.weekdays is not None else [data.weekday]
     selected_weekdays = [weekday for weekday in selected_weekdays if weekday is not None]
@@ -384,10 +412,17 @@ def create_room_reservation(
     archive_expired_room_reservations(db)
     user = get_db_user_from_token(db, current_user)
     ensure_room_exists(db, data.room_id)
+    validate_reservation_window(
+        data.start_date,
+        data.end_date,
+        data.start_time,
+        data.end_time,
+    )
     selected_weekdays = selected_weekdays_from_create(data)
     recurrence_frequency = normalize_recurrence_frequency(data.recurrence_frequency)
 
     for weekday in selected_weekdays:
+        validate_weekday_in_date_range(data.start_date, data.end_date, weekday)
         conflict = find_reservation_conflict(
             db,
             data.room_id,
@@ -533,6 +568,13 @@ def update_room_reservation(
     )
 
     ensure_room_exists(db, new_room_id)
+    validate_reservation_window(
+        new_start_date,
+        new_end_date,
+        new_start_time,
+        new_end_time,
+    )
+    validate_weekday_in_date_range(new_start_date, new_end_date, new_weekday)
 
     if reservation.status == "approved":
         conflict = find_reservation_conflict(
@@ -597,6 +639,18 @@ def approve_room_reservation(
 
     if not reservation:
         raise HTTPException(status_code=404, detail="Rezervasyon bulunamadı")
+
+    validate_reservation_window(
+        reservation.start_date,
+        reservation.end_date,
+        reservation.start_time,
+        reservation.end_time,
+    )
+    validate_weekday_in_date_range(
+        reservation.start_date,
+        reservation.end_date,
+        reservation.weekday,
+    )
 
     conflict = find_reservation_conflict(
         db,
