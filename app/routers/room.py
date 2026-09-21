@@ -487,12 +487,14 @@ def get_pending_room_reservations(
     archive_expired_room_reservations(db)
     user = get_db_user_from_token(db, current_user)
 
-    if not can_approve_rooms(db, user):
-        raise HTTPException(status_code=403, detail="Mekan taleplerini görüntüleme yetkiniz yok")
-
-    reservations = db.query(RoomReservation).filter(
+    query = db.query(RoomReservation).filter(
         RoomReservation.status == "pending"
-    ).order_by(
+    )
+
+    if not can_approve_rooms(db, user):
+        query = query.filter(RoomReservation.created_by == user.id)
+
+    reservations = query.order_by(
         RoomReservation.start_date.asc(),
         RoomReservation.start_time.asc(),
     ).all()
@@ -748,8 +750,6 @@ def delete_room_reservation(
     if not is_approver and reservation.created_by != current_db_user.id:
         raise HTTPException(status_code=403, detail="Bu rezervasyonu silme yetkiniz yok")
 
-    if not is_approver and reservation.status == "approved":
-        raise HTTPException(status_code=403, detail="Onaylı programı silme yetkiniz yok")
 
     matching_reservations = db.query(RoomReservation).filter(
         RoomReservation.room_id == reservation.room_id,
