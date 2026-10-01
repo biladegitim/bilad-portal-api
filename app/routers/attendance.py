@@ -25,7 +25,6 @@ from app.core.timezone import (
     utc_now,
     utc_to_turkey,
 )
-from app.core.work_schedule import work_hours_for_date
 
 
 router = APIRouter()
@@ -52,15 +51,12 @@ def leave_interval_for_day(leave: LeaveRequest, record_date, user: User):
     if (
         leave_type in ["annual", "report", "weekly"]
         and leave.leave_period not in ["morning", "afternoon"]
+        and user.work_start_time
+        and user.work_end_time
     ):
-        work_start_time, work_end_time = work_hours_for_date(user, record_date)
-
-        if not work_start_time or not work_end_time:
-            return None
-
         return (
-            datetime.combine(record_date, work_start_time),
-            datetime.combine(record_date, work_end_time),
+            datetime.combine(record_date, user.work_start_time),
+            datetime.combine(record_date, user.work_end_time),
         )
 
     start_time = max(leave.start_time, day_start)
@@ -88,13 +84,11 @@ def merge_leave_intervals(intervals):
 
 
 def attendance_window_for_day(user: User, record_date, leaves: list[LeaveRequest]):
-    work_start_time, work_end_time = work_hours_for_date(user, record_date)
-
-    if not work_start_time or not work_end_time:
+    if not user.work_start_time or not user.work_end_time:
         return None, None, False
 
-    expected_start = datetime.combine(record_date, work_start_time)
-    expected_end = datetime.combine(record_date, work_end_time)
+    expected_start = datetime.combine(record_date, user.work_start_time)
+    expected_end = datetime.combine(record_date, user.work_end_time)
     intervals = []
 
     for leave in leaves:
@@ -153,14 +147,12 @@ def serialize_daily_report(user: User, records: list[AttendanceRecord]):
         late = False
         early_exit = False
 
-        work_start_time, work_end_time = work_hours_for_date(user, record_date)
-
-        if work_start_time and first_entry:
-            expected_start = datetime.combine(record_date, work_start_time)
+        if user.work_start_time and first_entry:
+            expected_start = datetime.combine(record_date, user.work_start_time)
             late = first_entry > expected_start + ATTENDANCE_TOLERANCE
 
-        if work_end_time and last_exit:
-            expected_end = datetime.combine(record_date, work_end_time)
+        if user.work_end_time and last_exit:
+            expected_end = datetime.combine(record_date, user.work_end_time)
             early_exit = last_exit < expected_end
 
         user_report.append({
@@ -394,7 +386,7 @@ def get_attendance_dashboard(
         is_inside = bool(user_records and user_records[-1].record_type == "check_in")
         late = False
 
-        if first_entry:
+        if first_entry and user.work_start_time:
             first_entry_local = utc_to_turkey(first_entry)
             expected_start, _, full_day_leave = attendance_window_for_day(
                 user,
@@ -446,7 +438,10 @@ def export_attendance_excel(
     db: Session = Depends(get_db),
 ):
     current_db_user = get_db_user_from_token(db, current_user)
-    users = scoped_users_query(db, current_db_user).order_by(User.full_name.asc()).all()
+    users = scoped_users_query(db, current_db_user).filter(
+        User.work_start_time.isnot(None),
+        User.work_end_time.isnot(None),
+    ).order_by(User.full_name.asc()).all()
     user_ids = [user.id for user in users]
 
     now_utc = utc_now()
@@ -555,9 +550,6 @@ def export_attendance_excel(
                     record_date,
                     approved_day_leaves,
                 )
-
-                if not expected_start and not expected_end and not day_records:
-                    continue
 
                 if (
                     not day_records

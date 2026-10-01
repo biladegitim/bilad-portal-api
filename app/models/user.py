@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Time, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Time
 from datetime import datetime
 
 from app.database.base import Base
@@ -18,8 +18,6 @@ class User(Base):
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     work_start_time = Column(Time, nullable=True)
     work_end_time = Column(Time, nullable=True)
-    work_type = Column(String, default="full_time", nullable=False)
-    weekly_work_schedule = Column(Text, nullable=True)
     annual_leave_days = Column(Integer, default=0, nullable=False)
 
     is_active = Column(Boolean, default=True)

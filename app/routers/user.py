@@ -1,5 +1,3 @@
-import json
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -31,7 +29,6 @@ from app.core.rbac import (
     require_can_manage_user,
     scoped_users_query,
 )
-from app.core.work_schedule import parse_time, serialize_weekly_schedule
 
 
 router = APIRouter()
@@ -102,67 +99,10 @@ def serialize_user(user: User):
         "is_active": user.is_active,
         "work_start_time": str(user.work_start_time) if user.work_start_time else None,
         "work_end_time": str(user.work_end_time) if user.work_end_time else None,
-        "work_type": user.work_type or "full_time",
-        "weekly_work_schedule": serialize_weekly_schedule(user),
         "annual_leave_days": user.annual_leave_days or 0,
         "device_id": user.device_id,
         "device_name": user.device_name,
     }
-
-
-def normalize_weekly_work_schedule(data: UserWorkHoursUpdate) -> list[dict]:
-    if data.work_type != "part_time":
-        return []
-
-    if not data.weekly_work_schedule:
-        raise HTTPException(
-            status_code=400,
-            detail="Yarı zamanlı çalışma için haftalık gün ve saat bilgisi gerekli",
-        )
-
-    schedule = []
-    working_days = 0
-
-    for item in data.weekly_work_schedule:
-        if item.weekday < 0 or item.weekday > 6:
-            raise HTTPException(status_code=400, detail="Geçersiz çalışma günü")
-
-        if not item.is_working:
-            schedule.append({
-                "weekday": item.weekday,
-                "is_working": False,
-                "start_time": None,
-                "end_time": None,
-            })
-            continue
-
-        if not item.start_time or not item.end_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Çalışılan günlerde başlangıç ve bitiş saati gerekli",
-            )
-
-        if item.end_time <= item.start_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Çalışma bitiş saati başlangıçtan sonra olmalıdır",
-            )
-
-        working_days += 1
-        schedule.append({
-            "weekday": item.weekday,
-            "is_working": True,
-            "start_time": item.start_time.strftime("%H:%M"),
-            "end_time": item.end_time.strftime("%H:%M"),
-        })
-
-    if working_days == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Yarı zamanlı çalışma için en az bir çalışma günü seçilmelidir",
-        )
-
-    return sorted(schedule, key=lambda item: item["weekday"])
 
 
 @router.post("/users")
@@ -329,34 +269,8 @@ def update_user_work_hours(
         "Bu kullanıcının mesai saatlerini yönetemezsiniz",
     )
 
-    if data.work_type not in ["full_time", "part_time"]:
-        raise HTTPException(status_code=400, detail="Geçersiz çalışma şekli")
-
-    if data.work_type == "full_time":
-        if not data.work_start_time or not data.work_end_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Tam zamanlı çalışma için başlangıç ve bitiş saati gerekli",
-            )
-
-        if data.work_end_time <= data.work_start_time:
-            raise HTTPException(
-                status_code=400,
-                detail="Mesai bitiş saati başlangıçtan sonra olmalıdır",
-            )
-
-        user.work_type = "full_time"
-        user.work_start_time = data.work_start_time
-        user.work_end_time = data.work_end_time
-        user.weekly_work_schedule = None
-    else:
-        schedule = normalize_weekly_work_schedule(data)
-        first_working_day = next(item for item in schedule if item["is_working"])
-
-        user.work_type = "part_time"
-        user.work_start_time = parse_time(first_working_day["start_time"])
-        user.work_end_time = parse_time(first_working_day["end_time"])
-        user.weekly_work_schedule = json.dumps(schedule, ensure_ascii=False)
+    user.work_start_time = data.work_start_time
+    user.work_end_time = data.work_end_time
 
     db.commit()
     db.refresh(user)
@@ -366,10 +280,8 @@ def update_user_work_hours(
         "user": {
             "id": user.id,
             "full_name": user.full_name,
-            "work_start_time": str(user.work_start_time) if user.work_start_time else None,
-            "work_end_time": str(user.work_end_time) if user.work_end_time else None,
-            "work_type": user.work_type,
-            "weekly_work_schedule": serialize_weekly_schedule(user),
+            "work_start_time": str(user.work_start_time),
+            "work_end_time": str(user.work_end_time),
         },
     }
 

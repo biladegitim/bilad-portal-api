@@ -9,7 +9,6 @@ from app.models.event import Event
 from app.models.menu import Menu
 from app.models.leave import LeaveRequest
 from app.models.user import User
-from app.core.work_schedule import work_hours_for_date
 
 router = APIRouter()
 
@@ -56,12 +55,11 @@ def get_home_data(db: Session = Depends(get_db)):
             leave_type != "excuse"
             and leave_period not in ["morning", "afternoon"]
             and user
+            and user.work_start_time
+            and user.work_end_time
         ):
-            work_start_time, work_end_time = work_hours_for_date(user, today)
-
-            if work_start_time and work_end_time:
-                display_start_time = datetime.combine(today, work_start_time)
-                display_end_time = datetime.combine(today, work_end_time)
+            display_start_time = datetime.combine(today, user.work_start_time)
+            display_end_time = datetime.combine(today, user.work_end_time)
 
         leave_list.append({
             "leave_id": leave.id,
