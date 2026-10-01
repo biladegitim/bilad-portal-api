@@ -9,6 +9,7 @@ from app.models.permission import Permission, UserPermission
 from app.core.dependencies import get_current_user
 from app.core.rbac import get_db_user_from_token, normalize_role
 from app.core.security import verify_password, hash_password
+from app.core.work_schedule import serialize_weekly_schedule
 
 
 router = APIRouter()
@@ -51,6 +52,10 @@ def get_profile(
         "role": normalize_role(user.role),
         "position": user.position,
         "profile_photo": user.profile_photo,
+        "work_start_time": str(user.work_start_time) if user.work_start_time else None,
+        "work_end_time": str(user.work_end_time) if user.work_end_time else None,
+        "work_type": user.work_type or "full_time",
+        "weekly_work_schedule": serialize_weekly_schedule(user),
     }
 
 

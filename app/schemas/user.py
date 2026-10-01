@@ -23,9 +23,18 @@ class UserOrganizationUpdate(BaseModel):
     position: str
     supervisor_id: Optional[int] = None
     
+class UserWorkDaySchedule(BaseModel):
+    weekday: int
+    is_working: bool = False
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+
+
 class UserWorkHoursUpdate(BaseModel):
-    work_start_time: time
-    work_end_time: time
+    work_type: str = "full_time"
+    work_start_time: Optional[time] = None
+    work_end_time: Optional[time] = None
+    weekly_work_schedule: Optional[list[UserWorkDaySchedule]] = None
 
 
 class UserAnnualLeaveUpdate(BaseModel):

@@ -67,6 +67,14 @@ with engine.begin() as connection:
     ))
     connection.execute(text(
         "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS work_type VARCHAR NOT NULL DEFAULT 'full_time'"
+    ))
+    connection.execute(text(
+        "ALTER TABLE users "
+        "ADD COLUMN IF NOT EXISTS weekly_work_schedule TEXT"
+    ))
+    connection.execute(text(
+        "ALTER TABLE users "
         "ADD COLUMN IF NOT EXISTS device_name VARCHAR"
     ))
     connection.execute(text(
