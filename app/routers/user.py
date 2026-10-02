@@ -333,13 +333,16 @@ def update_user_work_hours(
         raise HTTPException(status_code=400, detail="Geçersiz çalışma şekli")
 
     if data.work_type == "full_time":
-        if not data.work_start_time or not data.work_end_time:
+        has_start_time = data.work_start_time is not None
+        has_end_time = data.work_end_time is not None
+
+        if has_start_time != has_end_time:
             raise HTTPException(
                 status_code=400,
-                detail="Tam zamanlı çalışma için başlangıç ve bitiş saati gerekli",
+                detail="Tam zamanlı çalışma için başlangıç ve bitiş saati birlikte girilmelidir",
             )
 
-        if data.work_end_time <= data.work_start_time:
+        if has_start_time and has_end_time and data.work_end_time <= data.work_start_time:
             raise HTTPException(
                 status_code=400,
                 detail="Mesai bitiş saati başlangıçtan sonra olmalıdır",
