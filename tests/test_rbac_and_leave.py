@@ -3,7 +3,8 @@ import unittest
 from datetime import datetime, time, timedelta
 from io import BytesIO
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
+from unittest.mock import patch
 from openpyxl import load_workbook
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +25,10 @@ from app.core.timezone import turkey_now, turkey_today
 from app.routers.attendance import export_attendance_excel
 from app.routers.event import create_event, send_due_event_reminders
 from app.routers.leave import (
+    create_report_leave_request,
+    get_leave_report,
+    reject_leave_request,
+    validate_report_document,
     approve_leave_request,
     create_leave_request,
     delete_leave_request,
@@ -223,7 +228,7 @@ class RbacAndLeaveTests(unittest.TestCase):
 
         self.assertEqual(response["status"], "approved")
 
-    def test_weekly_and_report_leaves_are_auto_approved_without_notifications(self):
+    def test_weekly_leaves_are_auto_approved_without_notifications(self):
         supervisor = self.add_user("Supervisor", "auto-supervisor@example.com", "admin")
         employee = self.add_user(
             "Employee",
@@ -232,7 +237,7 @@ class RbacAndLeaveTests(unittest.TestCase):
             supervisor.id,
         )
 
-        for leave_type in ["weekly", "report"]:
+        for leave_type in ["weekly"]:
             response = create_leave_request(
                 LeaveCreate(
                     start_time=datetime.utcnow(),
@@ -253,6 +258,61 @@ class RbacAndLeaveTests(unittest.TestCase):
             self.db.query(Notification).filter(Notification.link == "/leaves").count(),
             0,
         )
+
+    def test_report_requires_attachment_even_via_json_endpoint(self):
+        employee = self.add_user("Employee", "report-missing@example.com")
+        with self.assertRaises(HTTPException) as error:
+            create_leave_request(
+                LeaveCreate(start_time=datetime(2026, 10, 19), end_time=datetime(2026, 10, 20), leave_type="report"),
+                {"sub": employee.email}, self.db,
+            )
+        self.assertEqual(error.exception.status_code, 400)
+        self.assertEqual(self.db.query(LeaveRequest).count(), 0)
+
+    def test_report_pending_only_super_admins_notified_and_can_decide(self):
+        supervisor = self.add_user("Admin", "report-admin@example.com", "admin")
+        employee = self.add_user("Employee", "report-owner@example.com", supervisor_id=supervisor.id)
+        super_admin = self.add_user("Super", "report-super@example.com", "super_admin")
+        other_super = self.add_user("Super 2", "report-super2@example.com", "super_admin")
+        outsider = self.add_user("Other", "report-other@example.com")
+        content = b"%PDF-1.7\nreport document"
+        with patch("app.routers.leave.send_notification_push"):
+            result = asyncio.run(create_report_leave_request(
+                datetime(2026, 10, 19), datetime(2026, 10, 20),
+                UploadFile(filename="rapor.pdf", file=BytesIO(content)),
+                {"sub": employee.email}, self.db,
+            ))
+        leave_id = result["leave_request_id"]
+        leave = self.db.get(LeaveRequest, leave_id)
+        self.assertEqual(leave.status, "pending")
+        self.assertEqual({n.user_id for n in self.db.query(Notification).all()}, {super_admin.id, other_super.id})
+        for actor in [supervisor, outsider]:
+            for action in [get_leave_report, approve_leave_request, reject_leave_request]:
+                with self.assertRaises(HTTPException) as error:
+                    action(leave_id, {"sub": actor.email}, self.db)
+                self.assertEqual(error.exception.status_code, 403)
+        for actor in [employee, super_admin]:
+            response = get_leave_report(leave_id, {"sub": actor.email}, self.db)
+            self.assertEqual(response.body, content)
+            self.assertEqual(response.headers["cache-control"], "private, no-store")
+        admin_leave = next(item for item in get_team_leaves({"sub": supervisor.email}, self.db)["leaves"] if item["id"] == leave_id)
+        self.assertFalse(admin_leave["can_view_report"])
+        self.assertTrue(admin_leave["report_available"])
+        with patch("app.routers.leave.send_notification_push"):
+            approve_leave_request(leave_id, {"sub": super_admin.email}, self.db)
+        self.assertEqual(leave.status, "approved")
+        self.assertEqual(leave.approved_by, super_admin.id)
+        with patch("app.routers.leave.send_notification_push"):
+            reject_leave_request(leave_id, {"sub": other_super.email}, self.db)
+        self.assertEqual(leave.status, "rejected")
+
+    def test_report_file_validation(self):
+        self.assertEqual(validate_report_document(b"%PDF-1.7", "rapor.pdf"), "application/pdf")
+        self.assertEqual(validate_report_document(b"\xff\xd8\xfftest", "rapor.jpg"), "image/jpeg")
+        self.assertEqual(validate_report_document(b"\x89PNG\r\n\x1a\n", "rapor.png"), "image/png")
+        for content, filename in [(b"", "empty.pdf"), (b"html", "fake.pdf"), (b"%PDF-1.7", "file.exe"), (b"%PDF-" + b"x" * (10 * 1024 * 1024), "large.pdf")]:
+            with self.assertRaises(HTTPException):
+                validate_report_document(content, filename)
 
     def test_weekly_leave_is_limited_to_two_days_per_month(self):
         employee = self.add_user(

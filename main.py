@@ -90,6 +90,11 @@ with engine.begin() as connection:
         "ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMP"
     ))
 
+with engine.begin() as connection:
+    connection.execute(text("ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS report_document BYTEA"))
+    connection.execute(text("ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS report_filename VARCHAR"))
+    connection.execute(text("ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS report_content_type VARCHAR"))
+
 app = FastAPI(title="Bilad Portal API")
 
 cors_origins = [

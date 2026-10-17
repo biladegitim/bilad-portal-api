@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, LargeBinary
 from datetime import datetime
+from sqlalchemy.orm import deferred
 
 from app.database.base import Base
 
@@ -16,6 +17,10 @@ class LeaveRequest(Base):
     reason = Column(String, nullable=True)
     leave_type = Column(String, default="standard", nullable=False)
     leave_period = Column(String, nullable=True)
+
+    report_document = deferred(Column(LargeBinary, nullable=True))
+    report_filename = Column(String, nullable=True)
+    report_content_type = Column(String, nullable=True)
 
     status = Column(String, default="pending")
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)

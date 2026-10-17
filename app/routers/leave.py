@@ -1,7 +1,9 @@
 from calendar import monthrange
 from datetime import datetime, time, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.responses import Response
+from urllib.parse import quote
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -38,9 +40,8 @@ HALF_DAY_PERIODS = {MORNING_PERIOD, AFTERNOON_PERIOD}
 AUTO_APPROVED_LEAVE_TYPES = {
     ANNUAL_LEAVE_TYPE,
     WEEKLY_LEAVE_TYPE,
-    REPORT_LEAVE_TYPE,
 }
-VALID_LEAVE_TYPES = AUTO_APPROVED_LEAVE_TYPES | {EXCUSE_LEAVE_TYPE}
+VALID_LEAVE_TYPES = AUTO_APPROVED_LEAVE_TYPES | {EXCUSE_LEAVE_TYPE, REPORT_LEAVE_TYPE}
 
 
 class AnnualLeaveUsedDaysUpdate(BaseModel):
@@ -226,7 +227,7 @@ def weekly_leave_balance(
     }
 
 
-def serialize_leave(db: Session, leave: LeaveRequest):
+def serialize_leave(db: Session, leave: LeaveRequest, actor: User):
     leave_user = db.query(User).filter(User.id == leave.user_id).first()
 
     return {
@@ -248,6 +249,8 @@ def serialize_leave(db: Session, leave: LeaveRequest):
         ),
         "status": leave.status,
         "approved_by": leave.approved_by,
+        "report_available": bool(leave.report_filename),
+        "can_view_report": actor.id == leave.user_id or normalize_role(actor.role) == "super_admin",
     }
 
 
@@ -356,6 +359,9 @@ def require_leave_manager(db: Session, actor: User, leave: LeaveRequest) -> User
     if not leave_user:
         raise HTTPException(status_code=404, detail="İzin sahibi kullanıcı bulunamadı")
 
+    if normalize_leave_type(leave.leave_type) == REPORT_LEAVE_TYPE and normalize_role(actor.role) != "super_admin":
+        raise HTTPException(status_code=403, detail="Rapor izinlerini yalnızca süper admin yönetebilir")
+
     if not can_manage_leave_user(db, actor, leave_user):
         raise HTTPException(
             status_code=403,
@@ -371,8 +377,19 @@ def create_leave_request(
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    return _create_leave_request(data, current_user, db)
+
+
+def _create_leave_request(
+    data: LeaveCreate, current_user: dict, db: Session,
+    report_document: bytes | None = None,
+    report_filename: str | None = None,
+    report_content_type: str | None = None,
+):
     current_db_user = get_db_user_from_token(db, current_user)
     leave_type = normalize_leave_type(data.leave_type)
+    if leave_type == REPORT_LEAVE_TYPE and not report_document:
+        raise HTTPException(status_code=400, detail="Rapor izni için rapor belgesi yüklemelisiniz")
     leave_period = normalize_leave_period(leave_type, data.leave_period)
     request_start_time = data.start_time
     request_end_time = data.end_time
@@ -446,6 +463,9 @@ def create_leave_request(
         reason=data.reason,
         leave_type=leave_type,
         leave_period=leave_period,
+        report_document=report_document,
+        report_filename=report_filename,
+        report_content_type=report_content_type,
         status="approved" if leave_type in AUTO_APPROVED_LEAVE_TYPES else "pending",
     )
 
@@ -456,12 +476,16 @@ def create_leave_request(
     notifications = []
 
     if leave_request.status == "pending":
-        for notify_user in leave_approvers(db, current_db_user):
+        approvers = leave_approvers(db, current_db_user)
+        if leave_type == REPORT_LEAVE_TYPE:
+            approvers = [user for user in db.query(User).filter(User.is_active == True).all()
+                         if normalize_role(user.role) == "super_admin"]
+        for notify_user in approvers:
             notifications.append(add_notification(
                 db,
                 notify_user.id,
-                "Yeni İzin Talebi",
-                f"{current_db_user.full_name} yeni bir izin talebi oluşturdu.",
+                "Yeni Rapor İzni" if leave_type == REPORT_LEAVE_TYPE else "Yeni İzin Talebi",
+                f"{current_db_user.full_name} rapor belgesiyle izin talebi oluşturdu." if leave_type == REPORT_LEAVE_TYPE else f"{current_db_user.full_name} yeni bir izin talebi oluşturdu.",
                 "/leaves",
             ))
 
@@ -476,6 +500,70 @@ def create_leave_request(
         "message": "İzin talebi oluşturuldu",
         "leave_request_id": leave_request.id,
     }
+
+
+MAX_REPORT_SIZE = 10 * 1024 * 1024
+
+
+def validate_report_document(content: bytes, filename: str) -> str:
+    extension = filename.rsplit(".", 1)[-1].lower()
+    signatures = {
+        "pdf": (b"%PDF-", "application/pdf"),
+        "jpg": (b"\xff\xd8\xff", "image/jpeg"),
+        "jpeg": (b"\xff\xd8\xff", "image/jpeg"),
+        "png": (b"\x89PNG\r\n\x1a\n", "image/png"),
+    }
+    if not content or len(content) > MAX_REPORT_SIZE:
+        raise HTTPException(status_code=400, detail="Rapor boş olamaz ve en fazla 10 MB olabilir")
+    expected = signatures.get(extension)
+    if not expected or not content.startswith(expected[0]):
+        raise HTTPException(status_code=400, detail="Geçerli bir PDF, JPG veya PNG rapor yükleyin")
+    return expected[1]
+
+
+@router.post("/report-leave-requests")
+async def create_report_leave_request(
+    start_time: datetime = Form(...),
+    end_time: datetime = Form(...),
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        content = await file.read(MAX_REPORT_SIZE + 1)
+    finally:
+        await file.close()
+    filename = (file.filename or "rapor").replace("\\", "/").rsplit("/", 1)[-1]
+    content_type = validate_report_document(content, filename)
+    return _create_leave_request(
+        LeaveCreate(start_time=start_time, end_time=end_time, leave_type=REPORT_LEAVE_TYPE),
+        current_user, db, content, filename[:255], content_type,
+    )
+
+
+@router.get("/leave-requests/{leave_id}/report")
+def get_leave_report(
+    leave_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    actor = get_db_user_from_token(db, current_user)
+    leave = db.query(LeaveRequest).filter(LeaveRequest.id == leave_id).first()
+    if not leave:
+        raise HTTPException(status_code=404, detail="İzin talebi bulunamadı")
+    if actor.id != leave.user_id and normalize_role(actor.role) != "super_admin":
+        raise HTTPException(status_code=403, detail="Bu raporu görüntüleme yetkiniz yok")
+    if not leave.report_document:
+        raise HTTPException(status_code=404, detail="Rapor belgesi bulunamadı")
+    return Response(
+        content=leave.report_document,
+        media_type=leave.report_content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''" + quote(leave.report_filename or "rapor", safe=""),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/my-leaves")
@@ -511,6 +599,8 @@ def get_my_leaves(
                 ),
                 "status": leave.status,
                 "approved_by": leave.approved_by,
+                "report_available": bool(leave.report_filename),
+                "can_view_report": True,
             }
             for leave in leaves
         ],
@@ -552,7 +642,7 @@ def get_team_leaves(
 
     return {
         "leaves": [
-            serialize_leave(db, leave)
+            serialize_leave(db, leave, current_db_user)
             for leave in leaves
         ]
     }
